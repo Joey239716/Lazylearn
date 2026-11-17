@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use stickstudy::lesson::Quiz;
-use stickstudy::pipeline::{self, LessonInfo, MakeOptions, VideoOptions};
+use stickstudy::pipeline::{self, CourseOptions, LessonInfo, MakeOptions, VideoOptions};
+use stickstudy::script::Recipe;
 use stickstudy::{omnivoice, script, styles, tts};
 
 const SIDEBAR_W: f32 = 264.;
@@ -47,6 +48,8 @@ enum Menu {
     SetStudent,
     SetEnergy,
     SetPace,
+    /// recipe of planned video i (course plan review)
+    Recipe(usize),
 }
 
 /// Options picked in the composer (start from the settings' defaults).
@@ -60,6 +63,7 @@ struct Draft {
     pace: f32,
     vertical: bool,
     provider: String,
+    course: bool,
 }
 
 impl Draft {
@@ -73,6 +77,7 @@ impl Draft {
             pace: s.pace,
             vertical: s.vertical,
             provider: s.provider.clone(),
+            course: s.course_mode,
         }
     }
 }
@@ -109,6 +114,7 @@ pub struct LazyApp {
     theater: bool,
     scrub: Option<f32>,
     seek_bounds: Rc<Cell<Bounds<Pixels>>>,
+    page_scroll: ScrollHandle,
     last_move: Instant,
     confirm_delete: Option<(PathBuf, Instant)>,
     /// open this project's player on the next render (after a job finishes)
@@ -154,7 +160,7 @@ impl LazyApp {
         let prompt = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(2, 10)
-                .placeholder("What should the video focus on? e.g. \"chapters 1–7 for my midterm, go slow on the proofs\"")
+                .placeholder("What do you need? e.g. \"split it by chapter; I only need the key terms and how to answer the review questions\"")
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let mk = |v: String, ph: &'static str, window: &mut Window, cx: &mut Context<Self>| {
@@ -230,6 +236,7 @@ impl LazyApp {
             theater: false,
             scrub: None,
             seek_bounds: Rc::new(Cell::new(Bounds::default())),
+            page_scroll: ScrollHandle::new(),
             last_move: Instant::now(),
             confirm_delete: None,
             pending_open: None,
@@ -265,8 +272,21 @@ impl LazyApp {
             }
             None => {}
         }
+        if let (Some(job), Page::Project(d)) = (env("LAZYLEARN_JOB"), self.page.clone()) {
+            match job.as_str() {
+                "render" => self.rerender(d, None, false, window, cx),
+                "revoice" => self.revoice(d, window, cx),
+                _ => {}
+            }
+        }
         if let (Some(t), Some(p)) = (env("LAZYLEARN_SEEK"), &mut self.player) {
             p.seek(t.parse().unwrap_or(0.0));
+        }
+        if let (Some(_), Some(p)) = (env("LAZYLEARN_PLAY"), &mut self.player) {
+            p.play();
+        }
+        if env("LAZYLEARN_THEATER").is_some() && self.player.is_some() {
+            self.set_theater(true, window);
         }
         if env("LAZYLEARN_QUIZ").is_some() {
             if let Page::Project(d) = self.page.clone() {
@@ -358,6 +378,7 @@ impl LazyApp {
         self.theater = false;
         self.menu = None;
         self.scrub = None;
+        self.page_scroll.set_offset(point(px(0.), px(0.)));
         if let Page::Project(d) = &page {
             self.player_vertical = false;
             self.open_player(d.clone(), false, window);
@@ -417,6 +438,9 @@ impl LazyApp {
         let first = self.attachments[0].clone();
         let dir = pipeline::unique_dir(&lessons, &first.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
         let _ = std::fs::create_dir_all(&dir);
+        if self.draft.course {
+            let _ = std::fs::write(dir.join(".course"), "");
+        }
         let info = LessonInfo {
             title: pretty_stem(&first),
             duration: 0.0,
@@ -426,7 +450,11 @@ impl LazyApp {
             created: pipeline::now_secs(),
         };
         let _ = info.save(&dir);
-        self.start_make(dir.clone(), self.attachments.clone(), focus, window, cx);
+        if self.draft.course {
+            self.start_plan(dir.clone(), self.attachments.clone(), focus, cx);
+        } else {
+            self.start_make(dir.clone(), self.attachments.clone(), focus, window, cx);
+        }
         self.attachments.clear();
         self.prompt.update(cx, |s, cx| s.set_value("", window, cx));
         self.rescan();
@@ -448,6 +476,7 @@ impl LazyApp {
             teaching: None,
             voice: self.voice_args(),
             video: VideoOptions { style: Some(parse(&d.style)), vertical: d.vertical, ..Default::default() },
+            recipe: Recipe::default(),
         };
         let id = self.next_job;
         self.next_job += 1;
@@ -456,6 +485,60 @@ impl LazyApp {
             pipeline::make(&opts, p, |_| {}).map(|_| ())
         }));
         cx.notify();
+    }
+
+    fn course_options(&self, dir: &Path, inputs: Vec<PathBuf>, direction: String) -> CourseOptions {
+        let d = &self.draft;
+        CourseOptions {
+            inputs,
+            out: Some(dir.to_path_buf()),
+            lessons_dir: self.settings.lessons_dir.clone(),
+            direction,
+            cast: parse(&d.cast),
+            model: None,
+            provider: parse(&d.provider),
+            no_vision: !self.settings.vision,
+            teaching: None,
+            voice: self.voice_args(),
+            video: VideoOptions { style: Some(parse(&d.style)), vertical: d.vertical, ..Default::default() },
+        }
+    }
+
+    /// Gemini reads the material and plans the videos; the plan is shown for review.
+    fn start_plan(&mut self, dir: PathBuf, inputs: Vec<PathBuf>, direction: String, cx: &mut Context<Self>) {
+        let o = self.course_options(&dir, inputs, direction);
+        let id = self.next_job;
+        self.next_job += 1;
+        self.jobs.push(Job::spawn(id, JobKind::Plan, String::new(), Some(dir), move |p, _| {
+            pipeline::plan_course(&o, p, |_| {}).map(|_| ())
+        }));
+        cx.notify();
+    }
+
+    /// Make every planned video that isn't made yet.
+    fn build_course(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
+        if self.running_job_for(&dir).is_some() {
+            return;
+        }
+        let proj = self.projects.iter().find(|p| p.dir == dir);
+        let inputs: Vec<PathBuf> = proj.map(|p| p.inputs.iter().map(PathBuf::from).collect()).unwrap_or_default();
+        let direction = proj.and_then(|p| p.focus.clone()).unwrap_or_default();
+        let o = self.course_options(&dir, inputs, direction);
+        let id = self.next_job;
+        self.next_job += 1;
+        let d2 = dir.clone();
+        self.jobs.push(Job::spawn(id, JobKind::Course, String::new(), Some(dir), move |p, _| {
+            pipeline::build_course(&d2, &o, &[], p).map(|_| ())
+        }));
+        cx.notify();
+    }
+
+    fn edit_plan(&mut self, dir: &Path, f: impl FnOnce(&mut stickstudy::course::Plan)) {
+        if let Ok(mut plan) = stickstudy::course::Plan::load(dir) {
+            f(&mut plan);
+            let _ = plan.save(dir);
+            self.rescan();
+        }
     }
 
     fn rerender(&mut self, dir: PathBuf, style: Option<styles::Style>, vertical: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -505,7 +588,8 @@ impl LazyApp {
             p.release(window);
         }
         // only ever delete inside the lessons folder
-        if dir.starts_with(&self.settings.lessons_dir) && dir.join("info.json").exists() || dir.join("lesson.json").exists() {
+        let known = dir.join("info.json").exists() || dir.join("lesson.json").exists() || library::is_course(&dir);
+        if dir.starts_with(&self.settings.lessons_dir) && known {
             let _ = std::fs::remove_dir_all(&dir);
         }
         self.confirm_delete = None;
@@ -696,6 +780,7 @@ impl Render for LazyApp {
                     let d = d.clone();
                     self.start_quiz(d);
                     self.set_theater(false, window);
+                    self.page_scroll.scroll_to_bottom();
                 }
             }
         }
@@ -936,10 +1021,15 @@ impl LazyApp {
             Page::Project(d) => Some(d.clone()),
             _ => None,
         };
+        // a course's videos show under it while the course (or one of its videos) is open
+        let open_course = current.as_ref().and_then(|c| {
+            self.projects.iter().find(|p| &p.dir == c).and_then(|p| if p.is_course() { Some(p.dir.clone()) } else { p.parent.clone() })
+        });
         let items: Vec<AnyElement> = self
             .projects
             .iter()
             .filter(|p| q.is_empty() || p.title.to_lowercase().contains(&q))
+            .filter(|p| !q.is_empty() || p.parent.is_none() || p.parent == open_course)
             .enumerate()
             .map(|(i, p)| self.render_project_row(i, p, current.as_deref() == Some(&p.dir), cx).into_any_element())
             .collect();
@@ -1040,7 +1130,10 @@ impl LazyApp {
     }
 
     fn render_project_row(&self, i: usize, p: &Project, selected: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let job = self.running_job_for(&p.dir).map(|j| (j.kind, j.state.lock().unwrap().overall(j.kind), j.state.lock().unwrap().current().map(|c| c.stage)));
+        let job = self.running_job_for(&p.dir).map(|j| {
+            let st = j.state.lock().unwrap();
+            (j.kind, st.overall(j.kind), st.current().map(|c| c.stage))
+        });
         let failed = self
             .job_for(&p.dir)
             .map(|j| j.finished() && j.state.lock().unwrap().error.is_some())
@@ -1092,10 +1185,28 @@ impl LazyApp {
                 .into_any_element()
         };
         let dir = p.dir.clone();
+        let child = p.parent.is_some();
+        let meta: AnyElement = match (&p.course, job.is_some()) {
+            (Some(c), false) => {
+                let n = c.videos.len();
+                let made = c.made();
+                div()
+                    .child(if c.plan.is_none() {
+                        "Not planned".to_string()
+                    } else if made == n {
+                        format!("{n} videos · {}", library::ago(p.created))
+                    } else {
+                        format!("{made}/{n} videos made")
+                    })
+                    .into_any_element()
+            }
+            _ => meta,
+        };
         div()
             .id(("proj", i))
             .px(px(8.))
-            .py(px(6.))
+            .py(px(if child { 4. } else { 6. }))
+            .when(child, |d| d.ml(px(18.)))
             .flex()
             .items_center()
             .gap(px(10.))
@@ -1105,8 +1216,8 @@ impl LazyApp {
             .when(!selected, |d| d.hover(|s| s.bg(hover())))
             .child(
                 div()
-                    .w(px(46.))
-                    .h(px(26.))
+                    .w(px(if child { 38. } else { 46. }))
+                    .h(px(if child { 22. } else { 26. }))
                     .flex_shrink_0()
                     .rounded(px(5.))
                     .overflow_hidden()
@@ -1116,9 +1227,10 @@ impl LazyApp {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .map(|d| match &p.thumb {
-                        Some(t) => d.child(img(t.clone()).size_full().object_fit(ObjectFit::Cover)),
-                        None => d.child(theme::icon("film").size(px(12.)).text_color(faint())),
+                    .map(|d| match (&p.thumb, p.is_course()) {
+                        (_, true) => d.bg(ca(0xf2b84b, 0.1)).border_color(ca(0xf2b84b, 0.25)).child(theme::icon("graduation-cap").size(px(14.)).text_color(gold())),
+                        (Some(t), _) => d.child(img(t.clone()).size_full().object_fit(ObjectFit::Cover)),
+                        (None, _) => d.child(theme::icon("film").size(px(12.)).text_color(faint())),
                     }),
             )
             .child(
@@ -1130,7 +1242,7 @@ impl LazyApp {
                     .gap(px(1.))
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(px(if child { 12. } else { 13. }))
                             .text_color(if selected { text() } else { c(0xd4d5d9) })
                             .truncate()
                             .child(p.title.clone()),
@@ -1321,11 +1433,9 @@ impl LazyApp {
         let d = &self.draft;
         let style_name = cap(&d.style);
         let voices = if !self.has_omnivoice {
-            "System voices".to_string()
-        } else if d.cast == "solo" {
-            short_voice(&d.teacher, omnivoice::DEFAULT_TEACHER)
+            "System voice".to_string()
         } else {
-            format!("{} + {}", short_voice(&d.teacher, omnivoice::DEFAULT_TEACHER), short_voice(&d.student, omnivoice::DEFAULT_STUDENT))
+            short_voice(&d.teacher, omnivoice::DEFAULT_TEACHER)
         };
 
         div()
@@ -1369,11 +1479,40 @@ impl LazyApp {
                             .border_color(border2())
                             .on_click(cx.listener(|this, _, _, cx| this.pick_files(cx))),
                     )
+                    .child(
+                        div()
+                            .id("mode-chip")
+                            .h(px(30.))
+                            .px(px(10.))
+                            .flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap(px(6.))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(ca(0xf2b84b, 0.45))
+                            .bg(ca(0xf2b84b, 0.08))
+                            .text_color(gold())
+                            .text_size(px(13.))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(ca(0xf2b84b, 0.14)))
+                            .child(theme::icon(if d.course { "graduation-cap" } else { "video" }).size(px(13.)))
+                            .child(if d.course { "Course" } else { "One video" })
+                            .tooltip(|window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new("Course: Gemini splits your material into several videos. One video: a single lesson.")
+                                    .build(window, cx)
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.draft.course = !this.draft.course;
+                                this.settings.course_mode = this.draft.course;
+                                this.settings.save();
+                                cx.notify();
+                            })),
+                    )
                     .child(self.chip(Menu::Style, "palette", style_name, cx))
                     .child(self.chip(Menu::Cast, if d.cast == "solo" { "user" } else { "users" }, if d.cast == "solo" { "Solo".into() } else { "Duo".into() }, cx))
                     .child(self.chip(Menu::Teacher, "audio-lines", voices, cx))
                     .child(self.chip(Menu::Energy, "sparkles", cap(&d.energy), cx))
-                    .child(self.chip(Menu::Pace, "gauge", format!("{:.2}×", d.pace).replace(".00×", "×").replace("0×", "×"), cx))
                     .child(
                         div()
                             .id("vertical-chip")
@@ -1458,7 +1597,7 @@ impl LazyApp {
         let d = &self.draft;
         // (label, description, selected, value)
         let mut items: Vec<(String, String, bool, String)> = vec![];
-        let mut title = "";
+        let title;
         match m {
             Menu::Style | Menu::SetStyle => {
                 title = "Visual style";
@@ -1506,6 +1645,16 @@ impl LazyApp {
                 title = "Script writer";
                 for (v, desc) in [("gemini", "Gemini (default): reads whole textbooks and diagrams"), ("claude", "Claude Sonnet via Claude Code")] {
                     items.push((cap(v), desc.into(), s.provider == v, v.into()));
+                }
+            }
+            Menu::Recipe(i) => {
+                title = "Video format";
+                let cur = match &self.page {
+                    Page::Project(d) => stickstudy::course::Plan::load(d).ok().and_then(|p| p.videos.get(i).map(|v| v.recipe)),
+                    _ => None,
+                };
+                for (r, desc) in RECIPES {
+                    items.push((cap(r.name()), desc.to_string(), cur == Some(*r), r.name().to_string()));
                 }
             }
             Menu::Rerender => {
@@ -1626,6 +1775,16 @@ impl LazyApp {
                 s.pace = val.parse().unwrap_or(1.0);
                 d.pace = s.pace;
             }
+            Menu::Recipe(i) => {
+                if let Page::Project(dir) = self.page.clone() {
+                    let r: Recipe = parse(val);
+                    self.edit_plan(&dir, |p| {
+                        if let Some(v) = p.videos.get_mut(i) {
+                            v.recipe = r;
+                        }
+                    });
+                }
+            }
             Menu::Rerender => {
                 if let Page::Project(dir) = self.page.clone() {
                     let vertical = dir.join("video-vertical.mp4").is_file();
@@ -1635,7 +1794,7 @@ impl LazyApp {
                 }
             }
         }
-        if !matches!(m, Menu::Style | Menu::Cast | Menu::Teacher | Menu::Student | Menu::Energy | Menu::Pace) {
+        if !matches!(m, Menu::Style | Menu::Cast | Menu::Teacher | Menu::Student | Menu::Energy | Menu::Pace | Menu::Recipe(_)) {
             self.settings.save();
         }
         self.menu = None;
@@ -1644,8 +1803,11 @@ impl LazyApp {
 
     // ------------------------------------------------------------- project
 
-    fn render_project(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_project(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let proj = self.projects.iter().find(|p| p.dir == dir).cloned();
+        if proj.as_ref().map(|p| p.is_course()).unwrap_or(false) || library::is_course(dir) {
+            return self.render_course(dir, proj, cx).into_any_element();
+        }
         let job = self.job_for(dir).map(|j| (j.kind, j.state.clone(), j.finished()));
         let running = job.as_ref().map(|j| !j.2).unwrap_or(false);
         let title = proj.as_ref().map(|p| p.title.clone()).unwrap_or_else(|| "Lesson".into());
@@ -1665,6 +1827,19 @@ impl LazyApp {
         }
         let has_video = proj.as_ref().map(|p| p.video.is_some() || p.vertical_video.is_some()).unwrap_or(false);
         let has_lesson = dir.join("lesson.json").is_file();
+        // a course's video: link back to the course, and on to the next video
+        let parent = proj.as_ref().and_then(|p| p.parent.clone());
+        let parent_title = parent.as_ref().and_then(|pd| self.projects.iter().find(|p| &p.dir == pd)).map(|p| p.title.clone());
+        let next = parent
+            .as_ref()
+            .and_then(|pd| self.projects.iter().find(|p| &p.dir == pd))
+            .and_then(|c| c.course.as_ref())
+            .and_then(|c| {
+                let i = c.videos.iter().position(|v| v == dir)?;
+                let nd = c.videos.get(i + 1)?.clone();
+                let t = self.projects.iter().find(|p| p.dir == nd).map(|p| p.title.clone())?;
+                Some((nd, t))
+            });
         let confirm = self.confirm_delete.as_ref().map(|(d, _)| d == dir).unwrap_or(false);
         let d1 = dir.to_path_buf();
         let d2 = dir.to_path_buf();
@@ -1682,6 +1857,22 @@ impl LazyApp {
                     .flex()
                     .flex_col()
                     .gap(px(5.))
+                    .when_some(parent.clone().zip(parent_title), |d, (pd, pt)| {
+                        d.child(
+                            div()
+                                .id("crumb")
+                                .flex()
+                                .items_center()
+                                .gap(px(5.))
+                                .text_size(px(12.))
+                                .text_color(faint())
+                                .cursor_pointer()
+                                .hover(|s| s.text_color(text()))
+                                .child(theme::icon("graduation-cap").size(px(13.)))
+                                .child(pt)
+                                .on_click(cx.listener(move |this, _, window, cx| this.open_page(Page::Project(pd.clone()), window, cx))),
+                        )
+                    })
                     .child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).line_height(px(28.)).child(title))
                     .child(div().text_size(px(13.)).text_color(faint()).child(meta.join("  ·  "))),
             )
@@ -1804,6 +1995,7 @@ impl LazyApp {
             .id("project-page")
             .size_full()
             .overflow_y_scroll()
+            .track_scroll(&self.page_scroll)
             .flex()
             .flex_col()
             .items_center()
@@ -1874,8 +2066,500 @@ impl LazyApp {
                                 })),
                         )
                     })
-                    .when(has_video && !running, |d| d.child(self.render_quiz(dir, cx))),
+                    .when(has_video && !running, |d| d.child(self.render_quiz(dir, cx)))
+                    .when_some(next, |d, (ndir, ntitle)| {
+                        d.child(
+                            div()
+                                .id("next-video")
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .gap(px(8.))
+                                .text_size(px(13.))
+                                .text_color(muted())
+                                .cursor_pointer()
+                                .hover(|s| s.text_color(text()))
+                                .child("Next video:")
+                                .child(div().text_color(text()).child(ntitle))
+                                .child(theme::icon("chevron-right").size(px(14.)))
+                                .on_click(cx.listener(move |this, _, window, cx| this.open_page(Page::Project(ndir.clone()), window, cx))),
+                        )
+                    }),
             )
+            .into_any_element()
+    }
+
+    fn render_course(&self, dir: &Path, proj: Option<Project>, cx: &mut Context<Self>) -> impl IntoElement {
+        let course = proj.as_ref().and_then(|p| p.course.clone());
+        let plan = course.as_ref().and_then(|c| c.plan.clone());
+        let title = proj.as_ref().map(|p| p.title.clone()).unwrap_or_else(|| "Course".into());
+        let job = self.job_for(dir).map(|j| (j.kind, j.state.clone(), j.finished()));
+        let running = job.as_ref().map(|j| !j.2).unwrap_or(false);
+        let building = running && job.as_ref().map(|j| j.0 == JobKind::Course).unwrap_or(false);
+        let n = plan.as_ref().map(|p| p.videos.len()).unwrap_or(0);
+        let made = course.as_ref().map(|c| c.made()).unwrap_or(0);
+        let mut meta = vec!["Course".to_string()];
+        if n > 0 {
+            meta.push(format!("{n} videos"));
+        }
+        if let Some(p) = &proj {
+            let l = p.length_label();
+            if !l.is_empty() {
+                meta.push(l);
+            }
+            meta.push(library::ago(p.created));
+        }
+        let confirm = self.confirm_delete.as_ref().map(|(d, _)| d == dir).unwrap_or(false);
+        let (d2, d3, d4) = (dir.to_path_buf(), dir.to_path_buf(), dir.to_path_buf());
+        let header = div()
+            .flex()
+            .items_start()
+            .justify_between()
+            .gap(px(16.))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(5.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .text_size(px(12.))
+                            .text_color(gold())
+                            .child(theme::icon("graduation-cap").size(px(13.)))
+                            .child("Course"),
+                    )
+                    .child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).line_height(px(28.)).child(title))
+                    .child(div().text_size(px(13.)).text_color(faint()).child(meta[1..].join("  ·  "))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .child(icon_btn("open-folder", "folder-open").on_click(cx.listener(move |_, _, _, cx| cx.open_with_system(&d2))))
+                    .child(if confirm {
+                        div()
+                            .id("delete-confirm")
+                            .h(px(28.))
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(7.))
+                            .bg(c(0xc4314b))
+                            .text_size(px(13.))
+                            .text_color(c(0xffffff))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(c(0xd23a55)))
+                            .child("Delete course")
+                            .on_click(cx.listener(move |this, _, window, cx| this.delete(d3.clone(), window, cx)))
+                            .into_any_element()
+                    } else {
+                        div()
+                            .id("delete")
+                            .size(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(7.))
+                            .text_color(muted())
+                            .cursor_pointer()
+                            .hover(|s| s.bg(hover()).text_color(red()))
+                            .child(theme::icon("trash").size(px(16.)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.confirm_delete = Some((d4.clone(), Instant::now()));
+                                cx.notify();
+                            }))
+                            .into_any_element()
+                    }),
+            );
+
+        let inputs = proj.as_ref().map(|p| p.inputs.clone()).unwrap_or_default();
+        let direction = proj.as_ref().and_then(|p| p.focus.clone()).filter(|f| !f.trim().is_empty());
+        let request = div()
+            .flex()
+            .flex_col()
+            .items_end()
+            .gap(px(8.))
+            .child(div().flex().flex_wrap().justify_end().gap(px(8.)).children(inputs.iter().enumerate().map(|(i, f)| {
+                let p = PathBuf::from(f);
+                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.clone());
+                div()
+                    .id(("in", i))
+                    .h(px(30.))
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .rounded(px(8.))
+                    .bg(surface())
+                    .border_1()
+                    .border_color(border())
+                    .text_size(px(13.))
+                    .text_color(muted())
+                    .child(theme::icon(file_icon(&p)).size(px(13.)).text_color(gold()))
+                    .child(div().max_w(px(260.)).truncate().child(name))
+            })))
+            .when_some(direction, |d, f| {
+                d.child(
+                    div()
+                        .max_w(px(560.))
+                        .px(px(14.))
+                        .py(px(10.))
+                        .rounded(px(14.))
+                        .rounded_tr(px(4.))
+                        .bg(surface2())
+                        .text_size(px(14.))
+                        .line_height(px(21.))
+                        .child(f),
+                )
+            });
+
+        // planning cards (this session)
+        let plan_cards = job
+            .as_ref()
+            .filter(|j| j.0 == JobKind::Plan)
+            .map(|(kind, st, _)| self.render_stage_cards(*kind, &st.lock().unwrap(), dir, cx));
+        // build status
+        let (cur_video, cur_stage, build_frac, build_err) = match job.as_ref().filter(|j| j.0 == JobKind::Course) {
+            Some((kind, st, _)) => {
+                let st = st.lock().unwrap();
+                let stage = st.current().map(|c| (c.stage, c.frac.as_ref().map(|f| f.1)));
+                (st.video.filter(|_| !st.finished).map(|v| v.0), stage, st.overall(*kind), st.error.clone())
+            }
+            None => (None, None, 0.0, None),
+        };
+        let planning_failed = plan.is_none() && !running;
+
+        let editable = !building;
+        let rows: Vec<AnyElement> = plan
+            .as_ref()
+            .map(|p| p.videos.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let vdir = course.as_ref().and_then(|c| c.videos.get(i).cloned()).unwrap_or_default();
+                let vproj = self.projects.iter().find(|p| p.dir == vdir).cloned();
+                let is_made = vdir.join("video.mp4").is_file();
+                let is_current = cur_video == Some(i + 1);
+                let status: AnyElement = if is_made {
+                    let p = vproj.clone();
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .text_size(px(12.))
+                        .text_color(faint())
+                        .child(p.as_ref().map(|p| p.length_label()).unwrap_or_default())
+                        .when_some(p.and_then(|p| p.quiz), |d, q| {
+                            d.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(3.))
+                                    .text_color(if q.best >= q.total { green() } else { muted() })
+                                    .child(theme::icon("check").size(px(11.)))
+                                    .child(format!("{}/{}", q.best, q.total)),
+                            )
+                        })
+                        .child(theme::icon("chevron-right").size(px(14.)))
+                        .into_any_element()
+                } else if is_current {
+                    let (label, f) = match cur_stage {
+                        Some((s, f)) => (short_stage(s), f),
+                        None => ("Starting", None),
+                    };
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(7.))
+                        .text_size(px(12.))
+                        .text_color(violet())
+                        .child(spinner(("vspin", i), violet()))
+                        .child(match f {
+                            Some(f) => format!("{label} {:.0}%", f * 100.0),
+                            None => label.to_string(),
+                        })
+                        .into_any_element()
+                } else if building {
+                    div().text_size(px(12.)).text_color(faint()).child("Queued").into_any_element()
+                } else {
+                    div()
+                        .text_size(px(12.))
+                        .font_family(MONO)
+                        .text_color(faint())
+                        .child(if v.minutes > 0.0 { format!("~{:.0} min", v.minutes) } else { String::new() })
+                        .into_any_element()
+                };
+                let open_dir = vdir.clone();
+                let course_dir = dir.to_path_buf();
+                div()
+                    .id(("pv", i))
+                    .px(px(12.))
+                    .py(px(10.))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .rounded(px(10.))
+                    .when(is_current, |d| d.bg(ca(0x8b7cf6, 0.07)))
+                    .when(is_made, |d| d.cursor_pointer().hover(|s| s.bg(hover())))
+                    .child(
+                        div()
+                            .w(px(if is_made { 52. } else { 26. }))
+                            .h(px(if is_made { 29. } else { 26. }))
+                            .flex_shrink_0()
+                            .rounded(px(6.))
+                            .overflow_hidden()
+                            .border_1()
+                            .border_color(border2())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(12.))
+                            .font_family(MONO)
+                            .text_color(muted())
+                            .map(|d| match vproj.as_ref().and_then(|p| p.thumb.clone()).filter(|_| is_made) {
+                                Some(t) => d.child(img(t).size_full().object_fit(ObjectFit::Cover)),
+                                None => d.child(format!("{}", i + 1)),
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).truncate().child(v.title.clone()))
+                            .when(!v.covers.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(faint()).truncate().child(v.covers.clone()))),
+                    )
+                    .child(if editable && !is_made {
+                        self.recipe_chip(i, v.recipe, cx).into_any_element()
+                    } else {
+                        div()
+                            .text_size(px(12.))
+                            .text_color(muted())
+                            .px(px(8.))
+                            .h(px(24.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(6.))
+                            .bg(surface2())
+                            .child(cap(v.recipe.name()))
+                            .into_any_element()
+                    })
+                    .child(div().w(px(84.)).flex().justify_end().child(status))
+                    .when(editable && !is_made && n > 1, |d| {
+                        d.child(
+                            div()
+                                .id(("rm", i))
+                                .size(px(24.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(6.))
+                                .text_color(faint())
+                                .cursor_pointer()
+                                .hover(|s| s.bg(hover()).text_color(red()))
+                                .child(theme::icon("x").size(px(13.)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.edit_plan(&course_dir, |p| {
+                                        if i < p.videos.len() {
+                                            p.videos.remove(i);
+                                        }
+                                    });
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .when(is_made, |d| d.on_click(cx.listener(move |this, _, window, cx| this.open_page(Page::Project(open_dir.clone()), window, cx))))
+                    .into_any_element()
+            })
+            .collect();
+        let remaining = n.saturating_sub(made);
+        let minutes: f32 = plan.as_ref().map(|p| p.videos.iter().map(|v| v.minutes).sum()).unwrap_or(0.0);
+        let d5 = dir.to_path_buf();
+        let d6 = dir.to_path_buf();
+        let retry_inputs: Vec<PathBuf> = inputs.iter().map(PathBuf::from).filter(|p| p.is_file()).collect();
+        let retry_dir = proj.as_ref().and_then(|p| p.focus.clone()).unwrap_or_default();
+
+        let plan_card = plan.as_ref().map(|p| {
+            div()
+                .rounded(px(14.))
+                .border_1()
+                .border_color(border())
+                .bg(surface())
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .px(px(18.))
+                        .pt(px(16.))
+                        .pb(px(10.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(theme::icon("list-checks").size(px(15.)).text_color(gold()))
+                                .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).child(if made == 0 && !building {
+                                    format!("Plan: {n} videos")
+                                } else {
+                                    format!("{made} of {n} videos made")
+                                }))
+                                .child(div().flex_1())
+                                .when(building, |d| d.child(div().w(px(160.)).child(bar(build_frac, violet())))),
+                        )
+                        .when(!p.notes.is_empty() && made == 0, |d| {
+                            d.child(div().text_size(px(13.)).line_height(px(19.)).text_color(muted()).child(p.notes.clone()))
+                        })
+                        .when(made == 0 && !building, |d| {
+                            d.child(div().text_size(px(12.)).text_color(faint()).child("Change a video's format or remove ones you don't need, then make them."))
+                        }),
+                )
+                .child(div().px(px(6.)).pb(px(6.)).flex().flex_col().children(rows))
+                .when(remaining > 0 && !building, |d| {
+                    d.child(
+                        div()
+                            .px(px(18.))
+                            .py(px(12.))
+                            .border_t_1()
+                            .border_color(border())
+                            .flex()
+                            .items_center()
+                            .gap(px(12.))
+                            .child(div().flex_1().text_size(px(12.)).text_color(faint()).child(if minutes > 0.0 {
+                                format!("About {:.0} minutes of video in total. You can watch each one as soon as it's done.", minutes)
+                            } else {
+                                "You can watch each video as soon as it's done.".to_string()
+                            }))
+                            .child(
+                                pill_btn("build", if made == 0 { format!("Make {remaining} videos") } else { format!("Make the other {remaining}") })
+                                    .on_click(cx.listener(move |this, _, _, cx| this.build_course(d5.clone(), cx))),
+                            ),
+                    )
+                })
+                .when(building, |d| {
+                    d.child(
+                        div()
+                            .id("cancel-build")
+                            .px(px(18.))
+                            .py(px(10.))
+                            .border_t_1()
+                            .border_color(border())
+                            .flex()
+                            .justify_end()
+                            .text_size(px(12.))
+                            .text_color(faint())
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(red()))
+                            .child("Stop after this step")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(j) = this.running_job_for(&d6) {
+                                    j.progress.cancel();
+                                }
+                                cx.notify();
+                            })),
+                    )
+                })
+        });
+
+        let dd = dir.to_path_buf();
+        div()
+            .id("course-page")
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.page_scroll)
+            .flex()
+            .flex_col()
+            .items_center()
+            .px(px(32.))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(COLUMN_W))
+                    .pt(px(28.))
+                    .pb(px(80.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(22.))
+                    .child(header)
+                    .child(request)
+                    .children(plan_cards)
+                    .when(planning_failed && job.is_none(), |d| {
+                        d.child(
+                            div()
+                                .p(px(16.))
+                                .rounded(px(12.))
+                                .border_1()
+                                .border_color(border())
+                                .bg(surface())
+                                .flex()
+                                .items_center()
+                                .gap(px(12.))
+                                .child(theme::icon("triangle-alert").size(px(16.)).text_color(gold()))
+                                .child(div().flex_1().text_size(px(14.)).text_color(muted()).child("This course wasn't planned yet."))
+                                .when(!retry_inputs.is_empty(), |d| {
+                                    d.child(pill_btn("replan", "Plan it").on_click(cx.listener(move |this, _, _, cx| {
+                                        this.start_plan(dd.clone(), retry_inputs.clone(), retry_dir.clone(), cx)
+                                    })))
+                                }),
+                        )
+                    })
+                    .children(plan_card)
+                    .when_some(build_err, |d, e| {
+                        d.child(
+                            div()
+                                .p(px(14.))
+                                .rounded(px(10.))
+                                .bg(ca(0xf0645a, 0.08))
+                                .border_1()
+                                .border_color(ca(0xf0645a, 0.3))
+                                .text_size(px(13.))
+                                .font_family(MONO)
+                                .text_color(c(0xf3a19a))
+                                .child(e),
+                        )
+                    }),
+            )
+    }
+
+    fn recipe_chip(&self, i: usize, r: Recipe, cx: &mut Context<Self>) -> impl IntoElement {
+        let m = Menu::Recipe(i);
+        let open = self.menu == Some(m);
+        div()
+            .relative()
+            .child(
+                div()
+                    .id(("recipe", i))
+                    .h(px(24.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(if open { border2() } else { border() })
+                    .text_size(px(12.))
+                    .text_color(muted())
+                    .cursor_pointer()
+                    .hover(|s| s.bg(hover()).text_color(text()))
+                    .child(cap(r.name()))
+                    .child(theme::icon("chevron-down").size(px(11.)).text_color(faint()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.toggle_menu(m, cx)
+                    })),
+            )
+            .when(open, |d| d.child(self.menu_panel(m, true, cx)))
     }
 
     fn render_stage_cards(&self, kind: JobKind, st: &JobState, dir: &Path, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1883,7 +2567,17 @@ impl LazyApp {
         let overall = st.overall(kind);
         let total_elapsed: f32 = st.cards.iter().map(|c| c.elapsed.unwrap_or_else(|| c.started.elapsed().as_secs_f32())).sum();
         let head = match (running, &st.error, st.cancelled) {
-            (true, _, _) => format!("Making your video · {:.0}%", overall * 100.0),
+            (true, _, _) => format!(
+                "{} · {:.0}%",
+                match kind {
+                    JobKind::Make => "Making your video",
+                    JobKind::Render => "Re-rendering",
+                    JobKind::Revoice => "Re-voicing",
+                    JobKind::Plan => "Planning the course",
+                    JobKind::Course => "Making the videos",
+                },
+                overall * 100.0
+            ),
             (false, Some(_), _) => "Something went wrong".into(),
             (false, None, true) => "Cancelled".into(),
             (false, None, false) => format!("Done in {}", fmt_dur(total_elapsed)),
@@ -2540,6 +3234,13 @@ impl LazyApp {
             .into_any_element()
     }
 }
+
+const RECIPES: &[(Recipe, &str)] = &[
+    (Recipe::Overview, "Understand it: intuition, definitions, examples, recap"),
+    (Recipe::Terms, "Term drill: each definition with an example and a memory hook"),
+    (Recipe::Questions, "How to answer the review questions, with model answers"),
+    (Recipe::Cram, "Exam cram: only what's most likely to be tested"),
+];
 
 fn toggle(id: &'static str, on: bool, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
     div()

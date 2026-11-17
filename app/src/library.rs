@@ -19,6 +19,29 @@ pub struct Project {
     pub vertical_video: Option<PathBuf>,
     pub quiz: Option<QuizResult>,
     pub question_count: usize,
+    /// set when this folder is a course (several videos planned from one direction)
+    pub course: Option<Course>,
+    /// the course folder this video belongs to
+    pub parent: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Course {
+    /// None while Gemini is still planning
+    pub plan: Option<stickstudy::course::Plan>,
+    /// one per planned video: its folder (may not exist yet)
+    pub videos: Vec<PathBuf>,
+}
+
+impl Course {
+    pub fn made(&self) -> usize {
+        self.videos.iter().filter(|d| d.join("video.mp4").is_file()).count()
+    }
+}
+
+/// A course folder: has a plan, or the app marked it as one before planning.
+pub fn is_course(dir: &Path) -> bool {
+    dir.join("plan.json").is_file() || dir.join(".course").is_file()
 }
 
 impl Project {
@@ -65,7 +88,52 @@ impl Project {
             vertical_video: some(dir.join("video-vertical.mp4")),
             quiz: QuizResult::load(dir),
             question_count,
+            course: None,
+            parent: None,
         })
+    }
+
+    pub fn load_course(dir: &Path) -> Option<(Project, Vec<Project>)> {
+        let plan = stickstudy::course::Plan::load(dir).ok();
+        let info = LessonInfo::load(dir).unwrap_or_default();
+        let videos: Vec<PathBuf> = plan
+            .as_ref()
+            .map(|p| p.videos.iter().enumerate().map(|(i, v)| dir.join(v.folder(i))).collect())
+            .unwrap_or_default();
+        let children: Vec<Project> = videos
+            .iter()
+            .filter_map(|d| Project::load(d))
+            .map(|mut c| {
+                c.parent = Some(dir.to_path_buf());
+                c
+            })
+            .collect();
+        let mut title = plan.as_ref().map(|p| p.title.clone()).filter(|t| !t.is_empty()).unwrap_or(info.title.clone());
+        if title.is_empty() {
+            title = dir.file_name().map(|n| n.to_string_lossy().replace(['-', '_'], " ")).unwrap_or_default();
+        }
+        let created = if info.created > 0 { info.created } else { children.iter().map(|c| c.created).min().unwrap_or(0) };
+        let me = Project {
+            dir: dir.to_path_buf(),
+            title,
+            duration: children.iter().map(|c| c.duration).sum(),
+            created,
+            style: info.style,
+            inputs: info.inputs,
+            focus: info.focus.or_else(|| plan.as_ref().map(|p| p.direction.clone()).filter(|d| !d.is_empty())),
+            thumb: children.iter().find_map(|c| c.thumb.clone()),
+            video: None,
+            vertical_video: None,
+            quiz: None,
+            question_count: children.iter().map(|c| c.question_count).sum(),
+            course: Some(Course { plan, videos }),
+            parent: None,
+        };
+        Some((me, children))
+    }
+
+    pub fn is_course(&self) -> bool {
+        self.course.is_some()
     }
 
     pub fn length_label(&self) -> String {
@@ -77,16 +145,18 @@ impl Project {
     }
 }
 
+/// Top-level projects newest first; a course's videos follow right after it (with `parent` set).
 pub fn scan(lessons_dir: &Path) -> Vec<Project> {
-    let mut out: Vec<Project> = std::fs::read_dir(lessons_dir)
+    let mut top: Vec<(Project, Vec<Project>)> = std::fs::read_dir(lessons_dir)
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| Project::load(&e.path()))
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .filter_map(|p| if is_course(&p) { Project::load_course(&p) } else { Project::load(&p).map(|x| (x, vec![])) })
         .collect();
-    out.sort_by(|a, b| b.created.cmp(&a.created));
-    out
+    top.sort_by(|a, b| b.0.created.cmp(&a.0.created));
+    top.into_iter().flat_map(|(p, kids)| std::iter::once(p).chain(kids)).collect()
 }
 
 /// `quiz_results.json`: the best and the latest attempt.

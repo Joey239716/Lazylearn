@@ -36,10 +36,14 @@ per-element pop-in animation, sound effects, ducked music, burned-in captions, c
 ## Repo layout
 
 ```
-Cargo.toml
+Cargo.toml      workspace: the engine + CLI (`stickstudy`) and the desktop app (`app/`, `lazylearn`)
 assets/fonts/   LilitaOne (display) + PatrickHand (handwriting), OFL, embedded with include_bytes!
+                geist/  Geist + Geist Mono (OFL): the app's UI fonts
 src/
-  main.rs       CLI (clap): make / render / revoice / frames / voices / styles / prompt
+  lib.rs        The engine as a library (all modules) + `command()` (child processes without console windows)
+  main.rs       CLI (clap): make / render / revoice / frames / voices / styles / prompt / course
+  pipeline.rs   make / render_videos / revoice / plan_course / build_course as library calls; info.json, thumb.png
+  progress.rs   Progress: stage events (start/info/frac/done) + cancel; the CLI prints, the app shows cards
   lesson.rs     Data model: Lesson, Scene, Line, Shot (+ShotKind), Item, Quiz, Pose + sanitize
   extract.rs    Text extraction: PDF (pdf-extract, falls back to pdftotext), PPTX (zip + regex), VTT/SRT cleanup
   script.rs     Prompt (cast + teaching style + SHOT_GUIDE) + JSON schema, shells out to `claude -p`
@@ -52,6 +56,7 @@ src/
   timeline.rs   Lays everything out in time (segments, transitions, captions, sfx, poses) + Renderer::frame(t)
   audio.rs      Synthesized sfx, generated lo-fi music, voice mixing, ducking, soft limiter
   render.rs     Parallel chunk rendering into ffmpeg, concat + audio, .srt, snapshots
+app/                         Lazylearn desktop app (GPUI + gpui-kit), see "The Lazylearn desktop app"
 samples/photosynthesis.txt   Small test lecture
 lessons/                     Generated lessons (gitignored)
 ```
@@ -160,50 +165,50 @@ Render stills instead of watching the whole video:
 - `target/` and `lessons/` are gitignored (except `lessons/test/lesson.json`).
 
 
-## NEXT: the Lazylearn desktop app (GPUI) — decided 2026-11-17
+## The Lazylearn desktop app (`app/`, GPUI)
 
-The user wants a real desktop app, not a terminal tool. Build it with **GPUI** (Zed's UI framework) plus
-**gpui-component** (longbridge's widget set: buttons, inputs, dropdowns, progress, scroll lists). Keep the
-`stickstudy` CLI working; both front ends share one engine.
+`cargo build --release -p lazylearn` → `target/release/lazylearn.exe` (no console window in release). Built on
+**gpui-kit 0.10** (pins `gpui-pre 0.3.12`; `extern crate gpui_kit as gpui` in main.rs). The first build takes
+~10 minutes. The CLI stays separate (`cargo build --release -p stickstudy`), so it doesn't compile GPUI.
 
-**Look and layout: like the Claude desktop app.**
-- Left **sidebar**: "New lesson" button at the top, search, the list of **projects** (one per lesson, newest
-  first, with a small thumbnail, title, length and quiz score), and **Settings** at the bottom.
-- Main pane for a project: a chat-like column. The material files appear as attachments, then cards for each
-  stage as it happens (reading visuals, writing script, voicing N/M lines, rendering with a progress bar), then
-  the **video player card**, then the **quiz**.
-- **New lesson** view: a composer like Claude's message box. Drop zone / attach button for PDFs, slides, notes,
-  images; a text box for what to focus on ("summarize chapters 1–7 for my midterm"); option chips for style,
-  cast (duo/solo), voices (presets by name), energy, pace, vertical; a Make button.
+Look: Herdr / Claude desktop. Near-black, hairline borders, Geist type, white pill buttons, gold accent, colored
+status dots. Custom title bar drawn inside the window (gpui-component `TitleBar`, transparent) with the Windows
+controls on the right. The sidebar color runs under it, and the main pane is an inset panel with a rounded top-left
+corner. Palette and helpers are in `app/src/theme.rs`. **Don't use a background darker than #0e0f11 behind small grey
+text**: GPUI's text-contrast shader speckles glyphs on near-black. Use whole-pixel font sizes. Never call
+`.hover()` twice on one element (GPUI panics), and never lock a job's `state` mutex twice in one expression
+(deadlock).
 
-**v1 features (all four were requested):**
-1. **Create**: everything `stickstudy make` does, with live per-stage progress.
-2. **Library**: the sidebar projects; open one to see its video and quiz; actions: re-render (other style or
-   vertical), re-voice, delete, open folder.
-3. **Built-in player + quiz**: play `video.mp4` inside the app. Decode video with ffmpeg
-   (`-f rawvideo -pix_fmt rgba`, scaled to the view size) on a background thread and play audio with rodio
-   (decode the mp4's audio to PCM with ffmpeg); sync frames to the audio clock. Controls: play/pause, seek bar
-   (restart decoding with `-ss`), fullscreen. When the video ends, the **clickable quiz** from `quiz.json`
-   appears: one question at a time, click or press 1–4, green/red feedback + explanation, score at the end,
-   saved to `quiz_results.json` (shown in the sidebar/library). This replaces the old "watch then quiz window" plan.
-4. **Settings**: OmniVoice folder (`STICKSTUDY_OMNIVOICE_DIR`), default style/voices/energy/pace, script
-   provider (Gemini default, Claude/Sonnet optional), lessons folder, ffmpeg path. Store as a small JSON file.
+- `app.rs`: the root view `LazyApp`. Pages: New (composer), Project (a lesson or a course), Settings. Sidebar
+  lists projects newest first. A course's videos nest under it while it's open.
+- Composer: attach (button or drop files anywhere), a text box (the focus, or the course **direction**), chips:
+  Course/One video, style, cast, teacher voice, energy, 9:16, and the ↑ button (Ctrl+Enter).
+  Course mode → `pipeline::plan_course` → the plan shows for review (change a video's recipe, remove videos) →
+  "Make N videos" → `pipeline::build_course`. The app writes `.course` into the folder before planning so it shows
+  up as a course right away.
+- `jobs.rs`: each make / render / revoice / plan / course build runs on its own thread; `Progress` events fill a
+  shared `JobState` (stage cards, fractions, current course video). The UI polls every 150 ms.
+- `player.rs`: ffmpeg decodes BGRA frames (1280×720 / 720×1280) on a thread; the soundtrack is decoded to PCM
+  once and played by rodio. Frames are shown against the audio clock (`Sink::get_pos`). Seeking restarts the decoder
+  with `-ss`. Old frames are freed with `window.drop_image`. When the video ends, the quiz opens.
+- Quiz: one question at a time, click or 1–4, green/red + explanation, score → `quiz_results.json` (best,
+  attempts), shown in the sidebar.
+- `library.rs`: scans the lessons folder (`info.json`, `thumb.png`, `quiz_results.json`, courses via
+  `plan.json`). Old lessons get a thumbnail, length and `quiz.json` backfilled on startup.
+- `settings.rs`: `%APPDATA%\Lazylearn\settings.json` (lessons folder, OmniVoice folder, ffmpeg, provider,
+  defaults). OmniVoice/ffmpeg paths are pushed into `STICKSTUDY_OMNIVOICE_DIR` / `STICKSTUDY_FFMPEG`.
+- Keys: Ctrl+N new lesson, Ctrl+B sidebar, Space/K play, ←/→ seek 5 s, M mute, F fullscreen, Esc, 1–4 answers.
 
-**Engine refactor needed first:**
-- Add `src/lib.rs` exposing the modules; `src/main.rs` becomes the CLI; the app is a second binary
-  (e.g. `src/bin/lazylearn.rs` or a `app/` module), named "Lazylearn".
-- Replace the pipeline's `eprintln!` progress with a progress callback/channel (stage, message, fraction) so
-  both the CLI (prints) and the app (cards + bars) can show it. Long work runs on background threads.
-- `make` should be a library function taking an options struct, returning the lesson folder.
-- Save a `thumb.png` per lesson (a mid-video frame via `render::snapshots`) for the sidebar.
-
-**Constraints:** Windows 10 + AMD GPU (GPUI renders with DirectX on Windows; fine). C: is nearly full —
-keep builds and caches on F: (see Windows dev notes). Coding sessions use Claude only (the user's rule);
-Gemini is only for script writing and the vision reading pass inside the product.
+**Checking screens without clicking** (debug builds): `LAZYLEARN_OPEN=<lesson dir>|settings`,
+`LAZYLEARN_SEEK=<s>`, `LAZYLEARN_PLAY=1`, `LAZYLEARN_THEATER=1`, `LAZYLEARN_QUIZ=1` (+`LAZYLEARN_PICK=n`),
+`LAZYLEARN_MENU=Style|Teacher|…`, `LAZYLEARN_ATTACH=a;b`, `LAZYLEARN_JOB=render|revoice`. Capture the window with
+PrintWindow (it works even when the window is covered). Don't drive the user's real mouse: it lands on whatever
+window is on top.
 
 ## Roadmap
 
 1. ✅ Renderer, MP4 export, shot system, props, doodle style
 2. ✅ Sound effects, music + ducking, captions
 3. More styles polished (cosmic / whiteboard / chalk exist but need a visual pass), vertical 9:16 layouts
-4. ~~`stickstudy watch` quiz window~~ → superseded by the GPUI app above (built-in player + quiz)
+4. ~~`stickstudy watch` quiz window~~ → superseded by the GPUI app (built-in player + quiz) ✅
+5. App next: macOS build check, volume slider, keyboard focus in the composer chips, editing plan titles

@@ -24,6 +24,8 @@ pub struct Settings {
     pub pace: f32,
     pub vertical: bool,
     pub vision: bool,
+    /// the composer makes a course (several videos) by default
+    pub course_mode: bool,
 }
 
 impl Default for Settings {
@@ -41,6 +43,7 @@ impl Default for Settings {
             pace: 1.0,
             vertical: false,
             vision: true,
+            course_mode: true,
         }
     }
 }
