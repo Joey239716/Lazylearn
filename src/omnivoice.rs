@@ -17,10 +17,26 @@ use std::time::{Duration, Instant};
 
 pub const DEFAULT_TEACHER: &str = "The Champion";
 pub const DEFAULT_STUDENT: &str = "The Neighbor";
-/// What a designed voice says once, to become the reference clip for every line.
-/// Every line copies this clip's delivery, so it is deliberately excited.
-const REF_TEXT: &str =
-    "Oh wow, okay, you are going to LOVE this! This is honestly one of the coolest things in all of science!";
+/// How lively the voices sound. Every line copies the delivery of the clip a voice is built
+/// from, so the energy is set by what that clip says and how.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum Energy {
+    Calm,
+    #[default]
+    Upbeat,
+    Hype,
+}
+
+impl Energy {
+    fn ref_text(self) -> &'static str {
+        match self {
+            Energy::Calm => "Today we're going to take a look at how plants turn sunlight into food. It's a simple idea, and a really useful one.",
+            Energy::Upbeat => "Oh wow, okay, you are going to LOVE this! This is honestly one of the coolest things in all of science!",
+            Energy::Hype => "LET'S GO! Oh my gosh, this is INSANE! You are NOT ready for how cool this is! Seriously, this is the BEST part!",
+        }
+    }
+}
+
 const REF_SEED: i64 = 11;
 
 /// English voice presets from the VoiceStudio gallery (name -> voice-design description).
@@ -113,6 +129,8 @@ pub struct Server {
     voices: HashMap<String, String>,
     /// Where designed reference clips are kept (the lesson's voices/ folder)
     pub voices_dir: Option<PathBuf>,
+    /// Energy of designed voices
+    pub energy: Energy,
     /// Which device the model runs on, for the progress output
     pub device: String,
 }
@@ -148,6 +166,7 @@ impl Server {
             http,
             voices: HashMap::new(),
             voices_dir: None,
+            energy: Energy::default(),
             device: String::new(),
         };
         let t0 = Instant::now();
@@ -197,9 +216,9 @@ impl Server {
             })?;
             (wav, text.trim().to_string())
         } else {
-            (self.designed_clip(&resolve(spec))?, REF_TEXT.to_string())
+            (self.designed_clip(&resolve(spec))?, self.energy.ref_text().to_string())
         };
-        let name = format!("ss-{:x}", fxhash(spec));
+        let name = format!("ss-{:x}", fxhash(&format!("{spec}|{:?}", self.energy)));
         let resp = self
             .http
             .post(format!("{}/v1/audio/voices", self.url))
@@ -215,7 +234,8 @@ impl Server {
 
     /// A reference clip for a voice description, reused from the lesson folder when it exists.
     fn designed_clip(&self, desc: &str) -> Result<Vec<u8>> {
-        let key = fxhash(&format!("{desc}|{REF_TEXT}|{REF_SEED}"));
+        let ref_text = self.energy.ref_text();
+        let key = fxhash(&format!("{desc}|{ref_text}|{REF_SEED}"));
         let cache = self.voices_dir.as_ref().map(|d| d.join(format!("{}-{:08x}.wav", slug(desc), key as u32)));
         if let Some(c) = &cache {
             if let Ok(b) = std::fs::read(c) {
@@ -223,7 +243,7 @@ impl Server {
             }
         }
         let wav = self.post_speech(serde_json::json!({
-            "input": REF_TEXT,
+            "input": ref_text,
             "instructions": desc,
             "seed": REF_SEED,
             "language": "English",

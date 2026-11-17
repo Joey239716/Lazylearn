@@ -26,8 +26,8 @@
             }
           ],
           "audio": "audio/s00_l00.wav",
-          "duration": 2.4503853,
-          "audio_start": 0.0629932
+          "duration": 2.5565,
+          "audio_start": 0.38045835
         },
         {
           "speaker": "student",
@@ -48,8 +48,8 @@
             }
           ],
           "audio": "audio/s00_l01.wav",
-          "duration": 2.3229024,
-          "audio_start": 0.0584127
+          "duration": 1.4007083,
+          "audio_start": 0.18058333
         },
         {
           "speaker": "teacher",
@@ -102,8 +102,8 @@
             }
           ],
           "audio": "audio/s00_l02.wav",
-          "duration": 6.433787,
-          "audio_start": 0.069070294
+          "duration": 4.979083,
+          "audio_start": 0.181
         },
         {
           "speaker": "teacher",
@@ -124,8 +124,8 @@
             }
           ],
           "audio": "audio/s00_l03.wav",
-          "duration": 1.5338323,
-          "audio_start": 0.085578226
+          "duration": 1.5022917,
+          "audio_start": 0.24400002
         }
       ],
       "quiz": {
@@ -161,8 +161,8 @@
             }
           ],
           "audio": "audio/s01_l00.wav",
-          "duration": 3.0263038,
-          "audio_start": 0.060589567
+          "duration": 3.4334166,
+          "audio_start": 0.23087502
         },
         {
           "speaker": "teacher",
@@ -194,8 +194,8 @@
             }
           ],
           "audio": "audio/s01_l01.wav",
-          "duration": 3.6691155,
-          "audio_start": 0.075283445
+          "duration": 3.2055833,
+          "audio_start": 0.16833332
         },
         {
           "speaker": "student",
@@ -216,8 +216,8 @@
             }
           ],
           "audio": "audio/s01_l02.wav",
-          "duration": 2.4910204,
-          "audio_start": 0.06145125
+          "duration": 2.2852914,
+          "audio_start": 0.14191666
         },
         {
           "speaker": "teacher",
@@ -259,8 +259,8 @@
             }
           ],
           "audio": "audio/s01_l03.wav",
-          "duration": 6.132018,
-          "audio_start": 0.053877555
+          "duration": 4.792375,
+          "audio_start": 0.174
         },
         {
           "speaker": "teacher",
@@ -281,8 +281,8 @@
             }
           ],
           "audio": "audio/s01_l04.wav",
-          "duration": 3.6375508,
-          "audio_start": 0.13591838
+          "duration": 3.4799998,
+          "audio_start": 0.38333336
         }
       ]
     },
@@ -324,8 +324,8 @@
             }
           ],
           "audio": "audio/s02_l00.wav",
-          "duration": 3.5317914,
-          "audio_start": 0.052108847
+          "duration": 2.738583,
+          "audio_start": 0.22604167
         },
         {
           "speaker": "student",
@@ -346,8 +346,8 @@
             }
           ],
           "audio": "audio/s02_l01.wav",
-          "duration": 2.2919726,
-          "audio_start": 0.041224487
+          "duration": 2.0067084,
+          "audio_start": 0.121625
         },
         {
           "speaker": "teacher",
@@ -411,8 +411,8 @@
             }
           ],
           "audio": "audio/s02_l02.wav",
-          "duration": 5.059864,
-          "audio_start": 0.08625851
+          "duration": 4.2870417,
+          "audio_start": 0.20666668
         },
         {
           "speaker": "teacher",
@@ -471,8 +471,8 @@
             }
           ],
           "audio": "audio/s02_l03.wav",
-          "duration": 2.9013603,
-          "audio_start": 0.05006803
+          "duration": 2.5195415,
+          "audio_start": 0.36450002
         }
       ],
       "quiz": {

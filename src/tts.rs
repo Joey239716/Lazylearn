@@ -45,6 +45,12 @@ pub struct VoiceArgs {
     /// Speaking speed (words per minute for say/espeak; -10..10 for sapi; 0.25–4.0 multiplier for openai)
     #[arg(long)]
     pub speed: Option<f32>,
+    /// omnivoice: how lively the voices sound
+    #[arg(long, value_enum, default_value_t = omnivoice::Energy::Upbeat)]
+    pub energy: omnivoice::Energy,
+    /// Speed every line up (or down) afterwards without changing pitch, e.g. 1.15 = 15% faster
+    #[arg(long, default_value_t = 1.0)]
+    pub pace: f32,
 }
 
 pub struct Voice {
@@ -55,6 +61,8 @@ pub struct Voice {
     http: Option<reqwest::blocking::Client>,
     /// the running OmniVoice server (started on first use, stopped when the Voice is dropped)
     omni: std::cell::RefCell<Option<omnivoice::Server>>,
+    energy: omnivoice::Energy,
+    pace: f32,
 }
 
 impl Voice {
@@ -101,12 +109,19 @@ impl Voice {
                 .build()
                 .expect("http client")
         });
-        Ok(Voice { backend: a.backend, teacher, student, speed: a.speed, http, omni: std::cell::RefCell::new(None) })
+        Ok(Voice { backend: a.backend, teacher, student, speed: a.speed, http, omni: std::cell::RefCell::new(None), energy: a.energy, pace: a.pace.clamp(0.5, 2.0) })
     }
 
     pub fn describe(&self) -> String {
         match self.backend {
             Backend::None => "no voice (subtitles only)".into(),
+            Backend::Omnivoice => format!(
+                "omnivoice — teacher/narrator: {}, student: {}, energy: {:?}{}",
+                self.teacher,
+                self.student,
+                self.energy,
+                if (self.pace - 1.0).abs() > 0.01 { format!(", pace ×{}", self.pace) } else { String::new() }
+            ),
             b => format!("{b:?} — teacher/narrator: {}, student: {}", self.teacher, self.student),
         }
     }
@@ -212,6 +227,7 @@ pub fn voice_lesson(lesson: &mut Lesson, dir: &Path, voice: &Voice) -> Result<()
         eprintln!("  🚀 starting OmniVoice…");
         let mut server = omnivoice::Server::start()?;
         server.voices_dir = Some(dir.join("voices"));
+        server.energy = voice.energy;
         eprintln!("  {}", server.device);
         *voice.omni.borrow_mut() = Some(server);
     }
@@ -250,6 +266,9 @@ pub fn voice_lesson(lesson: &mut Lesson, dir: &Path, voice: &Voice) -> Result<()
                 voice
                     .synth(&line.text, line.speaker, &path)
                     .with_context(|| format!("voicing scene {} line {}", si + 1, li + 1))?;
+            }
+            if (voice.pace - 1.0).abs() > 0.01 {
+                change_pace(&path, voice.pace)?;
             }
             let (start, dur) = speech_span(&path)
                 .with_context(|| format!("reading generated audio {}", path.display()))?;
@@ -354,6 +373,24 @@ fn write_pcm16(out: &Path, bytes: &[u8], rate: u32) -> Result<()> {
         w.write_sample(i16::from_le_bytes([ch[0], ch[1]]))?;
     }
     w.finalize()?;
+    Ok(())
+}
+
+/// Time-stretch a WAV in place (pitch stays the same).
+fn change_pace(path: &Path, pace: f32) -> Result<()> {
+    let ff = crate::render::ffmpeg()?;
+    let tmp = path.with_extension("pace.wav");
+    let st = Command::new(&ff)
+        .args(["-v", "error", "-y", "-i"])
+        .arg(path)
+        .args(["-af", &format!("atempo={pace}"), "-c:a", "pcm_s16le"])
+        .arg(&tmp)
+        .status()
+        .context("running ffmpeg to change the pace")?;
+    if !st.success() {
+        bail!("ffmpeg couldn't change the pace of {}", path.display());
+    }
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 

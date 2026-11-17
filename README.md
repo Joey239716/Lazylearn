@@ -92,5 +92,9 @@ omnivoice/
 Point `STICKSTUDY_OMNIVOICE_DIR` at it, or put it next to the `stickstudy` executable. Voices are
 **described** (`--teacher-voice "female, middle-aged, low pitch, british accent"`) or **cloned** from a
 `.wav` with its transcript in a `.txt` next to it. Each character's voice is made once and saved in the
-lesson's `voices/` folder, so it sounds the same on every line. It runs at about real-time speed on a
+lesson's `voices/` folder, so it sounds the same on every line. The defaults are the gallery presets
+**The Champion** (teacher) and **The Neighbor** (student); any preset works by name (`stickstudy voices`).
+
+Liveliness: `--energy calm|upbeat|hype` (default `upbeat`) sets how excited the voices sound, and
+`--pace 1.15` speeds every line up 15% without changing the pitch (works with any voice engine). It runs at about real-time speed on a
 mid-range GPU.
