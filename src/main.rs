@@ -4,6 +4,7 @@ mod extract;
 mod gfx;
 mod icons;
 mod lesson;
+mod omnivoice;
 mod render;
 mod script;
 mod shots;

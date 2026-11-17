@@ -2,6 +2,7 @@
 //! 16-bit WAV per dialogue line so the player can time animations to speech.
 
 use crate::lesson::{Lesson, Speaker};
+use crate::omnivoice;
 use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 use std::io::Write;
@@ -10,7 +11,7 @@ use std::process::{Command, Stdio};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Backend {
-    /// Best free offline voice for this computer (Windows: sapi, macOS: say, Linux: espeak)
+    /// Best free offline voice here: omnivoice if installed, else sapi (Windows) / say (macOS) / espeak
     Auto,
     /// Windows built-in voices (free, offline)
     Sapi,
@@ -20,6 +21,8 @@ pub enum Backend {
     Piper,
     /// OpenAI gpt-4o-mini-tts (very natural, paid) — needs OPENAI_API_KEY
     Openai,
+    /// OmniVoice (free, local, natural; GPU via Vulkan, voice design + cloning) — needs STICKSTUDY_OMNIVOICE_DIR
+    Omnivoice,
     /// ElevenLabs (most expressive, paid) — needs ELEVENLABS_API_KEY
     Elevenlabs,
     /// eSpeak NG (free, offline, robotic retro sound) — `brew install espeak-ng`
@@ -50,11 +53,14 @@ pub struct Voice {
     student: String,
     speed: Option<f32>,
     http: Option<reqwest::blocking::Client>,
+    /// the running OmniVoice server (started on first use, stopped when the Voice is dropped)
+    omni: std::cell::RefCell<Option<omnivoice::Server>>,
 }
 
 impl Voice {
     pub fn new(a: &VoiceArgs) -> Result<Voice> {
         let backend = match a.backend {
+            Backend::Auto if omnivoice::find_dir().is_some() => Backend::Omnivoice,
             Backend::Auto if cfg!(windows) => Backend::Sapi,
             Backend::Auto if cfg!(target_os = "macos") => Backend::Say,
             Backend::Auto => Backend::Espeak,
@@ -65,6 +71,7 @@ impl Voice {
             Backend::Sapi => ("Microsoft David Desktop", "Microsoft Zira Desktop"),
             Backend::Say => ("Daniel", "Samantha"),
             Backend::Openai => ("fable", "nova"),
+            Backend::Omnivoice => (omnivoice::DEFAULT_TEACHER, omnivoice::DEFAULT_STUDENT),
             Backend::Elevenlabs => ("pNInz6obpgDQGcFmaJgB", "21m00Tcm4TlvDq8ikWAM"), // Adam, Rachel
             Backend::Espeak => ("en-gb+m3", "en-us+f3"),
             Backend::Piper | Backend::None | Backend::Auto => ("", ""),
@@ -94,7 +101,7 @@ impl Voice {
                 .build()
                 .expect("http client")
         });
-        Ok(Voice { backend: a.backend, teacher, student, speed: a.speed, http })
+        Ok(Voice { backend: a.backend, teacher, student, speed: a.speed, http, omni: std::cell::RefCell::new(None) })
     }
 
     pub fn describe(&self) -> String {
@@ -165,6 +172,12 @@ impl Voice {
                     .bytes()?;
                 write_pcm16(out, &bytes, 24_000)
             }
+            Backend::Omnivoice => {
+                let mut omni = self.omni.borrow_mut();
+                let server = omni.as_mut().context("OmniVoice server not started")?;
+                let name = server.voice_for(voice)?;
+                server.speak(text, &name, out)
+            }
             Backend::Elevenlabs => {
                 let url = format!(
                     "https://api.elevenlabs.io/v1/text-to-speech/{voice}?output_format=pcm_22050"
@@ -195,6 +208,13 @@ pub fn voice_lesson(lesson: &mut Lesson, dir: &Path, voice: &Voice) -> Result<()
     }
     std::fs::create_dir_all(&audio_dir)?;
     let total = lesson.line_count();
+    if voice.backend == Backend::Omnivoice {
+        eprintln!("  🚀 starting OmniVoice…");
+        let mut server = omnivoice::Server::start()?;
+        server.voices_dir = Some(dir.join("voices"));
+        eprintln!("  {}", server.device);
+        *voice.omni.borrow_mut() = Some(server);
+    }
     if voice.backend == Backend::Sapi {
         // one PowerShell process for the whole lesson (starting one per line is slow)
         let mut jobs = vec![];
@@ -369,6 +389,12 @@ pub fn print_voice_guide() {
     println!("              --teacher-voice en_US-ryan-high.onnx --student-voice en_US-amy-medium.onnx");
     println!("  openai      Very natural & expressive (acting instructions per character). Paid, ~1-3¢/lesson.");
     println!("              export OPENAI_API_KEY=…  voices: alloy ash ballad coral echo fable nova onyx sage shimmer verse");
+    println!("  omnivoice   Free, local, natural. Runs on your GPU through Vulkan (AMD/NVIDIA/Intel) or the CPU.");
+    println!("              Needs STICKSTUDY_OMNIVOICE_DIR (bin/ + models/). Voices are either a description from:");
+    println!("              male|female, child|teenager|young adult|middle-aged|elderly,");
+    println!("              very low|low|moderate|high|very high pitch, whisper, american|british|australian|... accent");
+    println!("              e.g. --teacher-voice \"female, middle-aged, low pitch, british accent\"");
+    println!("              or a .wav to clone (put its transcript in a .txt next to it).");
     println!("  elevenlabs  Most expressive. Paid/free tier.  export ELEVENLABS_API_KEY=…");
     println!("              voices are IDs from elevenlabs.io/app/voice-library (defaults: Adam, Rachel)");
     println!("  espeak      Retro robot voice, free. `brew install espeak-ng`  voices: en-us+m3, en-gb+f2, …");

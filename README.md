@@ -66,7 +66,8 @@ Pick one with `--voice <engine>`. Give each character a voice with `--teacher-vo
 
 | Engine | Cost | Sound | Setup |
 |---|---|---|---|
-| `auto` (default) | free | OK | uses `sapi` on Windows and `say` on macOS |
+| `auto` (default) | free | — | `omnivoice` when it's set up, otherwise `sapi` on Windows and `say` on macOS |
+| `omnivoice` | free | natural, **recommended** | local and offline; uses your GPU through Vulkan (AMD, NVIDIA or Intel) or the CPU. See below |
 | `sapi` | free | OK, robotic | none (Windows built-in) |
 | `say` | free | OK | none (macOS). Download "Premium" voices in System Settings → Accessibility → Spoken Content for better quality |
 | `piper` | free | natural | `pip install piper-tts` plus a `.onnx` voice from huggingface.co/rhasspy/piper-voices |
@@ -74,3 +75,22 @@ Pick one with `--voice <engine>`. Give each character a voice with `--teacher-vo
 | `elevenlabs` | free tier / paid | most expressive | `ELEVENLABS_API_KEY=…` |
 | `espeak` | free | retro robot | `espeak-ng` |
 | `none` | free | silent | captions only |
+
+### Setting up OmniVoice (recommended)
+
+OmniVoice is an open voice model. Lazylearn runs its small native server (`tts-server`, from
+[omnivoice.cpp](https://github.com/debpalash/VoiceStudio), the engine inside VoiceStudio). It needs no
+Python and no app. Make a folder like this:
+
+```
+omnivoice/
+  bin/     tts-server-<platform>[.exe] and its ggml libraries (in VoiceStudio's installer, under resources/bin)
+  models/  omnivoice-base-Q8_0.gguf + omnivoice-tokenizer-Q8_0.gguf
+           (from huggingface.co/Serveurperso/OmniVoice-GGUF, about 945 MB)
+```
+
+Point `STICKSTUDY_OMNIVOICE_DIR` at it, or put it next to the `stickstudy` executable. Voices are
+**described** (`--teacher-voice "female, middle-aged, low pitch, british accent"`) or **cloned** from a
+`.wav` with its transcript in a `.txt` next to it. Each character's voice is made once and saved in the
+lesson's `voices/` folder, so it sounds the same on every line. It runs at about real-time speed on a
+mid-range GPU.

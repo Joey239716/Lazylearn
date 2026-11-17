@@ -80,8 +80,14 @@ when building. ffmpeg must be on PATH or in `STICKSTUDY_FFMPEG`. `STICKSTUDY_CLA
 1. **Script** (`script.rs`): one `claude -p --json-schema` call. The schema requires `shots` on every line.
    `SHOT_GUIDE` documents each shot kind and its fields, the pacing rule (new picture every 2–4 s of speech),
    on-screen text limits, and the icon list. Cast is `--cast duo` (teacher + student) or `solo` (narrator host).
-2. **Voices** (`tts.rs`): `auto` = `sapi` on Windows (one batched PowerShell/System.Speech call for all
-   lines), `say` on macOS, `espeak` on Linux. `speech_span` trims leading/trailing silence so pacing is tight.
+2. **Voices** (`tts.rs`, `omnivoice.rs`): `auto` = `omnivoice` when `STICKSTUDY_OMNIVOICE_DIR` (or
+   `<exe dir>/omnivoice`) holds `bin/tts-server-*` + `models/omnivoice-{base,tokenizer}-Q8_0.gguf`, else `sapi`
+   on Windows (one batched PowerShell/System.Speech call), `say` on macOS, `espeak` on Linux. OmniVoice:
+   Lazylearn spawns the native omnivoice.cpp `tts-server` (taken from VoiceStudio's installer, no Python) on
+   a free port, designs each character's voice once from attribute tags (seeded), caches the clip in
+   `<lesson>/voices/`, registers it via `POST /v1/audio/voices`, then voices lines with `POST /v1/audio/speech`
+   (`{input, voice, language, response_format:"wav"}`). The user rejected the VoiceStudio desktop app as too
+   heavy; use only the stripped engine. On this machine: RX 6650 XT via Vulkan, ~1× realtime. `speech_span` trims leading/trailing silence so pacing is tight.
 3. **Timeline** (`timeline.rs`): intro card → per scene (chapter card for scenes 2+) → lines back to back
    (`GAP` 0.16 s) → outro "QUIZ TIME" card. Each line's shots start at their `cue` word (or split the line
    evenly); shots shorter than `MIN_SHOT` are dropped. Word timings are **estimated** from text length +
