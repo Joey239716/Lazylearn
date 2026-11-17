@@ -316,7 +316,7 @@ fn fxhash(s: &str) -> u64 {
     h
 }
 
-fn b64(data: &[u8]) -> String {
+pub fn b64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for c in data.chunks(3) {

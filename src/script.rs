@@ -125,8 +125,11 @@ pub fn write_lesson(material: &str, opts: &ScriptOptions) -> Result<Lesson> {
 
 pub fn build_prompt(material: &str, opts: &ScriptOptions) -> String {
     let mut material = material.to_string();
-    if material.len() > MAX_MATERIAL_CHARS {
-        let mut cut = MAX_MATERIAL_CHARS;
+    // Gemini reads ~1M tokens at once, so whole textbooks fit; Claude gets a cap.
+    let max = if opts.provider == Provider::Gemini { 3_000_000 } else { MAX_MATERIAL_CHARS };
+    if material.len() > max {
+        eprintln!("  ⚠️  material is {} characters; only the first {max} are used", material.len());
+        let mut cut = max;
         while !material.is_char_boundary(cut) {
             cut -= 1;
         }

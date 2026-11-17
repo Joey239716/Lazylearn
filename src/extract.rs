@@ -6,13 +6,25 @@ use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 
-pub fn extract_all(paths: &[std::path::PathBuf]) -> Result<String> {
+/// `visual_pass`: images and scanned PDFs are allowed to have no text, because
+/// Gemini's reading pass (vision.rs) will read them instead.
+pub fn extract_all(paths: &[std::path::PathBuf], visual_pass: bool) -> Result<String> {
     let mut out = String::new();
     for p in paths {
         let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         eprintln!("  📄 reading {name}");
+        if crate::vision::is_image(p) {
+            if !visual_pass {
+                bail!("{} is an image; images are read by Gemini (use --provider gemini)", p.display());
+            }
+            continue;
+        }
         let text = extract(p).with_context(|| format!("couldn't read {}", p.display()))?;
         let text = tidy(&text);
+        if text.trim().is_empty() && visual_pass {
+            eprintln!("    no selectable text — Gemini will read the pages instead");
+            continue;
+        }
         if text.trim().is_empty() {
             bail!("{} contains no readable text (scanned PDF or image-only slides?)", p.display());
         }

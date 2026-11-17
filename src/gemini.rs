@@ -74,12 +74,18 @@ pub fn ask_gemini_api(prompt: &str, schema: &Value, api_key: &str, model: Option
 
 /// Structured generation via local Antigravity CLI (`agy`).
 pub fn ask_gemini_agy(prompt: &str, schema: &Value, model: Option<&str>) -> Result<Lesson> {
-    let mut temp_schema = std::env::temp_dir();
+    let v = run_agy(prompt, schema, model, None)?;
+    serde_json::from_value(v).context("Gemini's JSON didn't match the lesson format")
+}
+
+/// Run one `agy` turn with a JSON schema and return the structured result.
+/// `workdir` (if any) is added to the agent's workspace so it can open the files in it.
+pub fn run_agy(prompt: &str, schema: &Value, model: Option<&str>, workdir: Option<&std::path::Path>) -> Result<Value> {
     let rand_id: u64 = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u64;
-    temp_schema.push(format!("stickstudy_schema_{}.json", rand_id));
+        .as_nanos() as u64;
+    let temp_schema = std::env::temp_dir().join(format!("stickstudy_schema_{rand_id}.json"));
     std::fs::write(&temp_schema, serde_json::to_string(schema)?)?;
 
     let mut cmd = Command::new(agy_bin());
@@ -91,6 +97,9 @@ pub fn ask_gemini_agy(prompt: &str, schema: &Value, model: Option<&str>) -> Resu
         "--dangerously-skip-permissions",
         "--disable-slash-commands",
     ]);
+    if let Some(d) = workdir {
+        cmd.arg("--add-dir").arg(d).current_dir(d);
+    }
     if let Some(m) = model {
         cmd.args(["--model", m]);
     }
@@ -99,12 +108,10 @@ pub fn ask_gemini_agy(prompt: &str, schema: &Value, model: Option<&str>) -> Resu
     let mut child = cmd
         .spawn()
         .context("couldn't run `agy` — is Antigravity CLI installed and on your PATH?")?;
-
     {
         let mut stdin = child.stdin.take().unwrap();
         stdin.write_all(prompt.as_bytes()).context("couldn't send prompt to agy")?;
     }
-
     let out = child.wait_with_output()?;
     let _ = std::fs::remove_file(&temp_schema);
 
@@ -117,27 +124,18 @@ pub fn ask_gemini_agy(prompt: &str, schema: &Value, model: Option<&str>) -> Resu
             stdout.trim()
         );
     }
-
     let v = parse_agy_output(&stdout)?;
     if v.get("status").and_then(Value::as_str) == Some("ERROR") {
         bail!("agy reported an error: {}", v.get("error").cloned().unwrap_or_default());
     }
-
-    let lesson_val = if let Some(s) = v.get("structured_output") {
-        if s.is_object() {
-            s.clone()
-        } else {
+    match v.get("structured_output") {
+        Some(s) if s.is_object() => Ok(s.clone()),
+        _ => {
             let resp = v.get("response").and_then(Value::as_str).unwrap_or("");
             serde_json::from_str(json_slice(resp))
-                .with_context(|| format!("agy response didn't contain valid JSON: {}", preview(resp)))?
+                .with_context(|| format!("agy response didn't contain valid JSON: {}", preview(resp)))
         }
-    } else {
-        let resp = v.get("response").and_then(Value::as_str).unwrap_or("");
-        serde_json::from_str(json_slice(resp))
-            .with_context(|| format!("agy response didn't contain valid JSON: {}", preview(resp)))?
-    };
-
-    serde_json::from_value(lesson_val).context("Gemini's JSON didn't match the lesson format")
+    }
 }
 
 fn parse_agy_output(stdout: &str) -> Result<Value> {

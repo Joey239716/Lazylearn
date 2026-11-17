@@ -12,6 +12,7 @@ mod shots;
 mod styles;
 mod timeline;
 mod tts;
+mod vision;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -88,6 +89,9 @@ enum Cmd {
         /// Provider for script writing: gemini (default, via Antigravity or GEMINI_API_KEY) or claude
         #[arg(long, value_enum, default_value_t = script::Provider::Gemini)]
         provider: script::Provider,
+        /// Skip Gemini's reading pass over diagrams, charts, slide images and scanned pages
+        #[arg(long)]
+        no_vision: bool,
         /// Replace the teaching-style instructions with the contents of this file
         /// (see `stickstudy prompt` for the default)
         #[arg(long)]
@@ -142,7 +146,7 @@ fn main() {
 
 fn run() -> Result<()> {
     match Cli::parse().cmd {
-        Cmd::Make { inputs, out, cast, scenes, focus, model, provider, teaching, voice, video } => {
+        Cmd::Make { inputs, out, cast, scenes, focus, model, provider, no_vision, teaching, voice, video } => {
             for p in &inputs {
                 if !p.exists() {
                     bail!("file not found: {}", p.display());
@@ -160,7 +164,23 @@ fn run() -> Result<()> {
             });
 
             eprintln!("📚 Reading your material…");
-            let material = extract::extract_all(&inputs)?;
+            let visual_pass = provider == script::Provider::Gemini && !no_vision;
+            let mut material = extract::extract_all(&inputs, visual_pass)?;
+            std::fs::create_dir_all(&dir)?;
+            if visual_pass {
+                let notes = vision::read_visuals(&inputs, &dir, None)?;
+                if !notes.is_empty() {
+                    std::fs::write(dir.join("visuals.txt"), &notes)?;
+                    material.push_str(&format!(
+                        "=== Diagrams, charts, tables and scanned pages (read from the material's images) ===
+{notes}
+"
+                    ));
+                }
+            }
+            if material.trim().is_empty() {
+                bail!("found nothing to learn from in the input files");
+            }
             std::fs::create_dir_all(&dir)?;
             std::fs::write(dir.join("material.txt"), &material)?;
             eprintln!("  {} characters of text extracted", material.len());

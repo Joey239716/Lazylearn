@@ -4,7 +4,7 @@ Context for any AI agent (or human) picking up this project. Read this before yo
 
 ## What this is
 
-A Rust CLI that turns a student's class material (PDF slides, PowerPoint, lecture transcripts, notes) into a
+A Rust tool (CLI today, GPUI desktop app next — see "NEXT" below) that turns a student's class material (PDF slides, PowerPoint, lecture transcripts, notes) into a
 fun, fully animated, voiced **study video (MP4)**: doodle characters, props, diagrams, kinetic captions, sound
 effects and music. Quizzes are written alongside and are meant to be taken **after** the video.
 It runs on **Windows and macOS**.
@@ -80,6 +80,11 @@ when building. ffmpeg must be on PATH or in `STICKSTUDY_FFMPEG`. `STICKSTUDY_CLA
 1. **Script** (`script.rs`): one `claude -p --json-schema` call. The schema requires `shots` on every line.
    `SHOT_GUIDE` documents each shot kind and its fields, the pacing rule (new picture every 2–4 s of speech),
    on-screen text limits, and the icon list. Cast is `--cast duo` (teacher + student) or `solo` (narrator host).
+1b. **Reading pass** (`vision.rs`, Gemini only, skip with `--no-vision`): PDFs (incl. scanned), images inside
+   .pptx slides (from `ppt/media`, mapped to slides via the slide rels, tiny/EMF ones skipped) and image inputs
+   are copied to `<lesson>/.vision/` and Gemini (`agy` with `--add-dir`, or the API with inline files) writes up
+   every diagram/chart/table/equation and transcribes pages without selectable text. Saved as `visuals.txt` and
+   appended to the material. With Gemini the material cap is 3M chars (whole textbooks); Claude keeps 150k.
 2. **Voices** (`tts.rs`, `omnivoice.rs`): `auto` = `omnivoice` when `STICKSTUDY_OMNIVOICE_DIR` (or
    `<exe dir>/omnivoice`) holds `bin/tts-server-*` + `models/omnivoice-{base,tokenizer}-Q8_0.gguf`, else `sapi`
    on Windows (one batched PowerShell/System.Speech call), `say` on macOS, `espeak` on Linux. OmniVoice:
@@ -141,9 +146,51 @@ Render stills instead of watching the whole video:
 - **No `Co-Authored-By` / Claude attribution lines** in commit messages.
 - `target/` and `lessons/` are gitignored (except `lessons/test/lesson.json`).
 
+
+## NEXT: the Lazylearn desktop app (GPUI) — decided 2026-11-17
+
+The user wants a real desktop app, not a terminal tool. Build it with **GPUI** (Zed's UI framework) plus
+**gpui-component** (longbridge's widget set: buttons, inputs, dropdowns, progress, scroll lists). Keep the
+`stickstudy` CLI working; both front ends share one engine.
+
+**Look and layout: like the Claude desktop app.**
+- Left **sidebar**: "New lesson" button at the top, search, the list of **projects** (one per lesson, newest
+  first, with a small thumbnail, title, length and quiz score), and **Settings** at the bottom.
+- Main pane for a project: a chat-like column. The material files appear as attachments, then cards for each
+  stage as it happens (reading visuals, writing script, voicing N/M lines, rendering with a progress bar), then
+  the **video player card**, then the **quiz**.
+- **New lesson** view: a composer like Claude's message box. Drop zone / attach button for PDFs, slides, notes,
+  images; a text box for what to focus on ("summarize chapters 1–7 for my midterm"); option chips for style,
+  cast (duo/solo), voices (presets by name), energy, pace, vertical; a Make button.
+
+**v1 features (all four were requested):**
+1. **Create**: everything `stickstudy make` does, with live per-stage progress.
+2. **Library**: the sidebar projects; open one to see its video and quiz; actions: re-render (other style or
+   vertical), re-voice, delete, open folder.
+3. **Built-in player + quiz**: play `video.mp4` inside the app. Decode video with ffmpeg
+   (`-f rawvideo -pix_fmt rgba`, scaled to the view size) on a background thread and play audio with rodio
+   (decode the mp4's audio to PCM with ffmpeg); sync frames to the audio clock. Controls: play/pause, seek bar
+   (restart decoding with `-ss`), fullscreen. When the video ends, the **clickable quiz** from `quiz.json`
+   appears: one question at a time, click or press 1–4, green/red feedback + explanation, score at the end,
+   saved to `quiz_results.json` (shown in the sidebar/library). This replaces the old "watch then quiz window" plan.
+4. **Settings**: OmniVoice folder (`STICKSTUDY_OMNIVOICE_DIR`), default style/voices/energy/pace, script
+   provider (Gemini default, Claude/Sonnet optional), lessons folder, ffmpeg path. Store as a small JSON file.
+
+**Engine refactor needed first:**
+- Add `src/lib.rs` exposing the modules; `src/main.rs` becomes the CLI; the app is a second binary
+  (e.g. `src/bin/lazylearn.rs` or a `app/` module), named "Lazylearn".
+- Replace the pipeline's `eprintln!` progress with a progress callback/channel (stage, message, fraction) so
+  both the CLI (prints) and the app (cards + bars) can show it. Long work runs on background threads.
+- `make` should be a library function taking an options struct, returning the lesson folder.
+- Save a `thumb.png` per lesson (a mid-video frame via `render::snapshots`) for the sidebar.
+
+**Constraints:** Windows 10 + AMD GPU (GPUI renders with DirectX on Windows; fine). C: is nearly full —
+keep builds and caches on F: (see Windows dev notes). Coding sessions use Claude only (the user's rule);
+Gemini is only for script writing and the vision reading pass inside the product.
+
 ## Roadmap
 
 1. ✅ Renderer, MP4 export, shot system, props, doodle style
 2. ✅ Sound effects, music + ducking, captions
 3. More styles polished (cosmic / whiteboard / chalk exist but need a visual pass), vertical 9:16 layouts
-4. `stickstudy watch`: play the MP4, then a clickable quiz window from `quiz.json`
+4. ~~`stickstudy watch` quiz window~~ → superseded by the GPUI app above (built-in player + quiz)
