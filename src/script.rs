@@ -95,8 +95,8 @@ Shot kinds and the fields they use:
 - question: \"text\" = a question to make the viewer think (max 12 words), optional \"icon\".
 - recap: \"title\" + 2-5 \"items\" that get ticked off. Use in the final recap scene.";
 
-pub fn write_lesson(material: &str, opts: &ScriptOptions) -> Result<Lesson> {
-    let prompt = build_prompt(material, opts);
+pub fn write_lesson(material: &str, opts: &ScriptOptions, p: &crate::progress::Progress) -> Result<Lesson> {
+    let prompt = build_prompt(material, opts, p);
     let schema_val = schema(opts.cast);
     let schema_str = schema_val.to_string();
     let mut last_err = None;
@@ -117,18 +117,19 @@ pub fn write_lesson(material: &str, opts: &ScriptOptions) -> Result<Lesson> {
             Err(e) => last_err = Some(e),
         }
         if attempt == 1 {
-            eprintln!("  ⚠️  {:#} — retrying once…", last_err.as_ref().unwrap());
+            p.check()?;
+            p.info(format!("⚠️  {:#} — retrying once…", last_err.as_ref().unwrap()));
         }
     }
     Err(last_err.unwrap())
 }
 
-pub fn build_prompt(material: &str, opts: &ScriptOptions) -> String {
+pub fn build_prompt(material: &str, opts: &ScriptOptions, p: &crate::progress::Progress) -> String {
     let mut material = material.to_string();
     // Gemini reads ~1M tokens at once, so whole textbooks fit; Claude gets a cap.
     let max = if opts.provider == Provider::Gemini { 3_000_000 } else { MAX_MATERIAL_CHARS };
     if material.len() > max {
-        eprintln!("  ⚠️  material is {} characters; only the first {max} are used", material.len());
+        p.info(format!("⚠️  material is {} characters; only the first {max} are used", material.len()));
         let mut cut = max;
         while !material.is_char_boundary(cut) {
             cut -= 1;

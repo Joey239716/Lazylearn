@@ -216,7 +216,7 @@ impl Voice {
 }
 
 /// Generate audio for every line, filling in `audio`, `audio_start` and `duration`.
-pub fn voice_lesson(lesson: &mut Lesson, dir: &Path, voice: &Voice) -> Result<()> {
+pub fn voice_lesson(lesson: &mut Lesson, dir: &Path, voice: &Voice, p: &crate::progress::Progress) -> Result<()> {
     let audio_dir = dir.join("audio");
     if audio_dir.exists() {
         std::fs::remove_dir_all(&audio_dir)?;
@@ -224,11 +224,11 @@ pub fn voice_lesson(lesson: &mut Lesson, dir: &Path, voice: &Voice) -> Result<()
     std::fs::create_dir_all(&audio_dir)?;
     let total = lesson.line_count();
     if voice.backend == Backend::Omnivoice {
-        eprintln!("  🚀 starting OmniVoice…");
+        p.info("🚀 starting OmniVoice…");
         let mut server = omnivoice::Server::start()?;
         server.voices_dir = Some(dir.join("voices"));
         server.energy = voice.energy;
-        eprintln!("  {}", server.device);
+        p.info(server.device.clone());
         *voice.omni.borrow_mut() = Some(server);
     }
     if voice.backend == Backend::Sapi {
@@ -243,16 +243,16 @@ pub fn voice_lesson(lesson: &mut Lesson, dir: &Path, voice: &Voice) -> Result<()
                 jobs.push((line.text.clone(), v, dir.join(format!("audio/s{si:02}_l{li:02}.wav"))));
             }
         }
-        eprintln!("  🎙  voicing {total} lines with Windows speech…");
+        p.frac(format!("voicing {total} lines with Windows speech…"), 0.0);
         sapi_batch(&jobs, voice.speed)?;
     }
     let mut done = 0;
     for (si, scene) in lesson.scenes.iter_mut().enumerate() {
         for (li, line) in scene.lines.iter_mut().enumerate() {
             done += 1;
+            p.check()?;
             if voice.backend != Backend::Sapi {
-                eprint!("\r  🎙  voicing line {done}/{total}   ");
-                let _ = std::io::stderr().flush();
+                p.frac(format!("voicing line {done}/{total}"), (done - 1) as f32 / total.max(1) as f32);
             }
             if voice.backend == Backend::None {
                 line.audio = None;
@@ -277,9 +277,7 @@ pub fn voice_lesson(lesson: &mut Lesson, dir: &Path, voice: &Voice) -> Result<()
             line.audio = Some(rel);
         }
     }
-    if voice.backend != Backend::Sapi {
-        eprintln!();
-    }
+    p.frac(format!("{total} lines voiced"), 1.0);
     Ok(())
 }
 

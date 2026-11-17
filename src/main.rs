@@ -1,23 +1,10 @@
-mod audio;
-mod character;
-mod extract;
-mod gemini;
-mod gfx;
-mod icons;
-mod lesson;
-mod omnivoice;
-mod render;
-mod script;
-mod shots;
-mod styles;
-mod timeline;
-mod tts;
-mod vision;
+use stickstudy::progress::Progress;
+use stickstudy::{lesson, pipeline, render, script, styles, tts};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use lesson::Lesson;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -145,82 +132,35 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    let p = Progress::cli();
     match Cli::parse().cmd {
         Cmd::Make { inputs, out, cast, scenes, focus, model, provider, no_vision, teaching, voice, video } => {
-            for p in &inputs {
-                if !p.exists() {
-                    bail!("file not found: {}", p.display());
-                }
-            }
-            render::ffmpeg()?; // fail fast, before the slow parts
-            let voice_engine = tts::Voice::new(&voice)?;
             let teaching = match teaching {
-                Some(p) => Some(std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?),
+                Some(f) => Some(std::fs::read_to_string(&f).with_context(|| format!("reading {}", f.display()))?),
                 None => None,
             };
-            let dir = out.unwrap_or_else(|| {
-                let stem = inputs[0].file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or("lesson".into());
-                PathBuf::from("lessons").join(stem)
-            });
-
-            eprintln!("📚 Reading your material…");
-            let visual_pass = provider == script::Provider::Gemini && !no_vision;
-            let mut material = extract::extract_all(&inputs, visual_pass)?;
-            std::fs::create_dir_all(&dir)?;
-            if visual_pass {
-                let notes = vision::read_visuals(&inputs, &dir, None)?;
-                if !notes.is_empty() {
-                    std::fs::write(dir.join("visuals.txt"), &notes)?;
-                    material.push_str(&format!(
-                        "=== Diagrams, charts, tables and scanned pages (read from the material's images) ===
-{notes}
-"
-                    ));
-                }
-            }
-            if material.trim().is_empty() {
-                bail!("found nothing to learn from in the input files");
-            }
-            std::fs::create_dir_all(&dir)?;
-            std::fs::write(dir.join("material.txt"), &material)?;
-            eprintln!("  {} characters of text extracted", material.len());
-
-            let provider_name = match provider {
-                script::Provider::Gemini => "Gemini",
-                script::Provider::Claude => "Claude",
+            let opts = pipeline::MakeOptions {
+                inputs,
+                out,
+                lessons_dir: PathBuf::from("lessons"),
+                cast,
+                scenes,
+                focus,
+                model,
+                provider,
+                no_vision,
+                teaching,
+                voice,
+                video: video.into(),
             };
-            eprintln!("✍️  {provider_name} is writing the script and shot list…");
-            let opts = script::ScriptOptions { scenes, focus, model, teaching, cast, provider };
-            let mut lesson = script::write_lesson(&material, &opts)?;
-            lesson.style = video.style.unwrap_or_default();
-            lesson.save(&dir)?;
-            let shots: usize = lesson.scenes.iter().flat_map(|s| &s.lines).map(|l| l.shots.len()).sum();
-            eprintln!(
-                "  \"{}\" — {} scenes, {} lines, {} shots, {} quiz questions",
-                lesson.title,
-                lesson.scenes.len(),
-                lesson.line_count(),
-                shots,
-                lesson.quizzes().len()
-            );
-
-            eprintln!("🗣  Recording voices: {}", voice_engine.describe());
-            tts::voice_lesson(&mut lesson, &dir, &voice_engine)?;
-            lesson.save(&dir)?;
-            write_quiz(&lesson, &dir)?;
-            render_videos(&mut lesson, &dir, &video)?;
+            pipeline::make(&opts, &p, |_| {})?;
         }
         Cmd::Render { dir, video } => {
             let mut lesson = Lesson::load(&dir)?;
-            render_videos(&mut lesson, &dir, &video)?;
+            pipeline::render_videos(&mut lesson, &dir, &video.into(), &p)?;
         }
         Cmd::Revoice { dir, voice, video } => {
-            let mut lesson = Lesson::load(&dir)?;
-            let v = tts::Voice::new(&voice)?;
-            eprintln!("🗣  Recording voices: {}", v.describe());
-            tts::voice_lesson(&mut lesson, &dir, &v)?;
-            lesson.save(&dir)?;
-            render_videos(&mut lesson, &dir, &video)?;
+            pipeline::revoice(&dir, &voice, &video.into(), &p)?;
         }
         Cmd::Frames { dir, at, style, vertical, out } => {
             let mut lesson = Lesson::load(&dir)?;
@@ -252,40 +192,19 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn render_videos(lesson: &mut Lesson, dir: &Path, v: &VideoArgs) -> Result<()> {
-    if let Some(s) = v.style {
-        lesson.style = s;
-    }
-    let mut sizes = vec![];
-    if !v.vertical_only {
-        sizes.push((1920u32, 1080u32, "video.mp4"));
-    }
-    if v.vertical || v.vertical_only {
-        sizes.push((1080, 1920, "video-vertical.mp4"));
-    }
-    for (w, h, name) in sizes {
-        eprintln!("🎬 Rendering {name} ({w}×{h}, {} style)…", lesson.style.name());
-        let opts = render::RenderOptions {
-            width: w,
-            height: h,
-            fps: v.fps,
-            until: v.until,
-            music: v.music.clone(),
+impl From<VideoArgs> for pipeline::VideoOptions {
+    fn from(v: VideoArgs) -> Self {
+        pipeline::VideoOptions {
+            style: v.style,
+            vertical: v.vertical,
+            vertical_only: v.vertical_only,
+            music: v.music,
+            music_db: v.music_db,
             no_music: v.no_music,
             no_sfx: v.no_sfx,
-            music_db: v.music_db,
+            fps: v.fps,
+            until: v.until,
             workers: v.workers,
-            out: dir.join(name),
-        };
-        let out = render::render(lesson, dir, &opts)?;
-        eprintln!("✅ {}", out.display());
+        }
     }
-    Ok(())
-}
-
-/// The quiz the video ends with, for the quiz window.
-fn write_quiz(lesson: &Lesson, dir: &Path) -> Result<()> {
-    let qs = lesson.quizzes();
-    std::fs::write(dir.join("quiz.json"), serde_json::to_string_pretty(&serde_json::json!({ "title": lesson.title, "questions": qs }))?)?;
-    Ok(())
 }

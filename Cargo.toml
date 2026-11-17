@@ -4,6 +4,17 @@ version = "0.2.0"
 edition = "2021"
 description = "Turn class material into fun, animated, voiced study videos (MP4) with a quiz at the end"
 
+[workspace]
+members = [".", "app"]
+
+[lib]
+name = "stickstudy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "stickstudy"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

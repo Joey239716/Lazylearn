@@ -1,0 +1,18 @@
+//! StickStudy engine: shared by the `stickstudy` CLI and the Lazylearn desktop app.
+pub mod audio;
+pub mod character;
+pub mod extract;
+pub mod gemini;
+pub mod gfx;
+pub mod icons;
+pub mod lesson;
+pub mod omnivoice;
+pub mod render;
+pub mod script;
+pub mod shots;
+pub mod styles;
+pub mod timeline;
+pub mod tts;
+pub mod vision;
+pub mod pipeline;
+pub mod progress;

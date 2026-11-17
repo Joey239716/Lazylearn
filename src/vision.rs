@@ -137,18 +137,18 @@ handwritten notes), add an entry with kind \"transcribed text\" containing the f
 Be complete: textbooks can have many figures. Respond with only the JSON.";
 
 /// Run the reading pass. Returns notes to append to the material ("" if there was nothing visual).
-pub fn read_visuals(inputs: &[PathBuf], lesson_dir: &Path, model: Option<&str>) -> Result<String> {
+pub fn read_visuals(inputs: &[PathBuf], lesson_dir: &Path, model: Option<&str>, p: &crate::progress::Progress) -> Result<String> {
     let work = lesson_dir.join(".vision");
     let files = prepare(inputs, &work)?;
     if files.is_empty() {
         let _ = std::fs::remove_dir_all(&work);
         return Ok(String::new());
     }
-    eprintln!("  👀 Gemini is reading {} visual file(s): diagrams, charts, tables, scans…", files.len());
+    p.info(format!("Gemini is reading {} visual file(s): diagrams, charts, tables, scans…", files.len()));
     let listing: String = files.iter().map(|(n, what)| format!("- {n}: {what}\n")).collect();
     let prompt = format!("{INSTRUCTIONS}\n\nFILES\n{listing}");
     let v = if let Some(key) = std::env::var("GEMINI_API_KEY").ok().filter(|k| !k.trim().is_empty()) {
-        api_read(&prompt, &files, &work, key.trim(), model)?
+        api_read(&prompt, &files, &work, key.trim(), model, p)?
     } else {
         gemini::run_agy(&prompt, &schema(), model, Some(&work))?
     };
@@ -163,19 +163,19 @@ pub fn read_visuals(inputs: &[PathBuf], lesson_dir: &Path, model: Option<&str>) 
         }
         out.push_str(&format!("[{} — {}, {}]\n{}\n\n", g("source"), g("where"), g("kind"), content));
     }
-    eprintln!("  {} visuals described", items.len());
+    p.info(format!("{} visuals described", items.len()));
     Ok(out)
 }
 
 /// Same pass through the Gemini API (files sent inline).
-fn api_read(prompt: &str, files: &[(String, String)], work: &Path, key: &str, model: Option<&str>) -> Result<Value> {
+fn api_read(prompt: &str, files: &[(String, String)], work: &Path, key: &str, model: Option<&str>, p: &crate::progress::Progress) -> Result<Value> {
     let mut parts = vec![json!({ "text": prompt })];
     let mut total = 0usize;
     for (name, _) in files {
         let bytes = std::fs::read(work.join(name))?;
         total += bytes.len();
         if total > 18_000_000 {
-            eprintln!("  ⚠️  material too large to send inline; skipping {name} and later files");
+            p.info(format!("⚠️  material too large to send inline; skipping {name} and later files"));
             break;
         }
         let mime = match ext(Path::new(name)).as_str() {

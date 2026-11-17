@@ -36,7 +36,7 @@ pub fn ffmpeg() -> Result<String> {
     }
 }
 
-pub fn render(lesson: &Lesson, dir: &Path, o: &RenderOptions) -> Result<PathBuf> {
+pub fn render(lesson: &Lesson, dir: &Path, o: &RenderOptions, p: &crate::progress::Progress) -> Result<PathBuf> {
     let ff = ffmpeg()?;
     let tl = Timeline::build(lesson, dir, o.width, o.height);
     let end = o.until.map(|u| u.min(tl.total)).unwrap_or(tl.total);
@@ -46,17 +46,17 @@ pub fn render(lesson: &Lesson, dir: &Path, o: &RenderOptions) -> Result<PathBuf>
         std::fs::create_dir_all(parent)?;
     }
     let shots = tl.segs.iter().filter(|s| matches!(s.vis, crate::timeline::Vis::Shot(_))).count();
-    eprintln!(
-        "  {} shots, {} sound effects, {}:{:04.1} long{}",
+    p.info(format!(
+        "{} shots, {} sound effects, {}:{:04.1} long{}",
         shots,
         tl.sfx.len(),
         (tl.total / 60.0) as u32,
         tl.total % 60.0,
         if o.until.is_some() { format!(" (rendering the first {end:.0}s)") } else { String::new() }
-    );
+    ));
 
     // ---- soundtrack
-    eprintln!("  🎵 mixing voice, sound effects and music…");
+    p.frac("mixing voice, sound effects and music…", 0.0);
     let mix = audio::mix(
         &tl,
         &audio::MixOptions {
@@ -79,13 +79,15 @@ pub fn render(lesson: &Lesson, dir: &Path, o: &RenderOptions) -> Result<PathBuf>
     let parts: Vec<PathBuf> = (0..workers).map(|i| work.join(format!("part_{i:02}.mp4"))).collect();
     let done = AtomicUsize::new(0);
     let started = std::time::Instant::now();
-    eprintln!("  🎞  rendering {nframes} frames on {workers} threads…");
+    p.info(format!("rendering {nframes} frames on {workers} threads"));
+    let cancel = std::sync::atomic::AtomicBool::new(false);
     let results: Vec<Result<()>> = std::thread::scope(|s| {
         let handles: Vec<_> = (0..workers)
             .map(|i| {
                 let (tl, ff, part, done) = (&tl, &ff, &parts[i], &done);
                 let (f0, f1) = (cuts[i], cuts[i + 1]);
-                s.spawn(move || render_chunk(tl, ff, f0, f1, o, part, done))
+                let cancel = &cancel;
+                s.spawn(move || render_chunk(tl, ff, f0, f1, o, part, done, cancel))
             })
             .collect();
         // progress
@@ -93,22 +95,25 @@ pub fn render(lesson: &Lesson, dir: &Path, o: &RenderOptions) -> Result<PathBuf>
             let d = done.load(Ordering::Relaxed);
             let el = started.elapsed().as_secs_f32();
             let eta = if d > 0 { el / d as f32 * (nframes - d) as f32 } else { 0.0 };
-            eprint!("\r     {d}/{nframes} frames  ({:.0}%)  ~{:.0}s left   ", 100.0 * d as f32 / nframes.max(1) as f32, eta);
-            let _ = std::io::stderr().flush();
+            let f = d as f32 / nframes.max(1) as f32;
+            p.frac(format!("{d}/{nframes} frames  ({:.0}%)  ~{:.0}s left", 100.0 * f, eta), f);
+            if p.cancelled() {
+                cancel.store(true, Ordering::Relaxed);
+            }
             if handles.iter().all(|h| h.is_finished()) {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            std::thread::sleep(std::time::Duration::from_millis(250));
         }
-        eprintln!();
         handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(anyhow::anyhow!("render thread panicked")))).collect()
     });
+    p.check()?;
     for r in results {
         r?;
     }
 
     // ---- join + soundtrack
-    eprintln!("  🔗 joining ({:.0}s of rendering)…", started.elapsed().as_secs_f32());
+    p.frac(format!("joining ({:.0}s of rendering)…", started.elapsed().as_secs_f32()), 1.0);
     let list = work.join("parts.txt");
     let abs = |p: &PathBuf| std::path::absolute(p).unwrap_or_else(|_| p.clone()).display().to_string().replace('\\', "/");
     std::fs::write(&list, parts.iter().map(|p| format!("file '{}'\n", abs(p))).collect::<String>())?;
@@ -129,7 +134,8 @@ pub fn render(lesson: &Lesson, dir: &Path, o: &RenderOptions) -> Result<PathBuf>
     Ok(o.out.clone())
 }
 
-fn render_chunk(tl: &Timeline, ff: &str, f0: usize, f1: usize, o: &RenderOptions, part: &Path, done: &AtomicUsize) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn render_chunk(tl: &Timeline, ff: &str, f0: usize, f1: usize, o: &RenderOptions, part: &Path, done: &AtomicUsize, cancel: &std::sync::atomic::AtomicBool) -> Result<()> {
     let mut child = Command::new(ff)
         .args(["-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{}x{}", o.width, o.height), "-r", &o.fps.to_string(), "-i", "-"])
         .args(["-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p", "-threads", "2", "-an"])
@@ -141,6 +147,9 @@ fn render_chunk(tl: &Timeline, ff: &str, f0: usize, f1: usize, o: &RenderOptions
     let mut stdin = child.stdin.take().unwrap();
     let mut r = Renderer::new(tl);
     for f in f0..f1 {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         r.frame(f as f32 / o.fps as f32);
         if stdin.write_all(r.g.bytes()).is_err() {
             break;
