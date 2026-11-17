@@ -1,0 +1,19 @@
+BIO 101 – Lecture 7: Photosynthesis
+
+Photosynthesis converts light energy into chemical energy stored in glucose.
+Overall equation: 6 CO2 + 6 H2O + light energy -> C6H12O6 + 6 O2.
+Takes place in chloroplasts. Chlorophyll (in thylakoid membranes) absorbs mostly red and blue light, reflects green.
+
+Two stages:
+1. Light-dependent reactions (thylakoid membranes)
+   - Water is split (photolysis), releasing O2 as a by-product.
+   - Light energy excites electrons in Photosystem II, then Photosystem I.
+   - Electron transport chain pumps H+ ions; ATP synthase makes ATP.
+   - NADP+ is reduced to NADPH.
+2. Calvin cycle / light-independent reactions (stroma)
+   - Carbon fixation: the enzyme RuBisCO attaches CO2 to RuBP.
+   - Uses ATP and NADPH from the light reactions to make G3P.
+   - G3P is used to build glucose; RuBP is regenerated.
+
+Common misconception: the Calvin cycle is NOT "the dark reactions" that happen at night; it runs during the day because it needs ATP and NADPH from the light reactions.
+Limiting factors: light intensity, CO2 concentration, temperature.
