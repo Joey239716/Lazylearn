@@ -170,7 +170,7 @@ SCRIPT RULES
 - Each line is spoken aloud by text-to-speech: max 28 words (most lines much shorter), punchy conversational sentences, no markdown, no emoji, no bullet symbols, no parentheses. Spell out symbols and formulas in words (say "x squared", not "x^2").
 - Add a multiple-choice quiz to roughly every other scene, and always to the final recap scene. The quizzes are played together after the video, so they can recall anything from the lesson. 3-4 choices, answer_index is 0-based, explanation is 1-2 sentences. Quizzes should test understanding, not trivia. Vary which position holds the correct answer.
 
-Do not call or use any tools. Respond with only the JSON lesson matching the schema.
+Do not call or use any tools. Respond with only the JSON lesson matching the schema. Leave out any field you don't use (no empty strings or empty lists).
 
 CLASS MATERIAL
 <<<
