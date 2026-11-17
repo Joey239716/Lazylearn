@@ -114,6 +114,27 @@ impl Progress {
         *self.stage.lock().unwrap()
     }
 
+    /// A handle for work running alongside other work (e.g. one video of a course build):
+    /// its messages are prefixed with `[tag] `, it tracks its own current stage, and it
+    /// shares the sink and the cancel flag with `self`.
+    pub fn tagged(&self, tag: impl Into<String>) -> Progress {
+        let prefix = format!("[{}] ", tag.into());
+        let parent = self.sink.clone();
+        let tag = move |m: String| format!("{prefix}{m}");
+        Progress {
+            sink: Arc::new(move |e| {
+                parent(match e {
+                    Event::Start(s, m) => Event::Start(s, tag(m)),
+                    Event::Info(s, m) => Event::Info(s, tag(m)),
+                    Event::Frac(s, m, f) => Event::Frac(s, tag(m), f),
+                    Event::Done(s) => Event::Done(s),
+                })
+            }),
+            stage: Arc::new(Mutex::new(self.stage())),
+            cancel: self.cancel.clone(),
+        }
+    }
+
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
     }

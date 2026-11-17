@@ -193,6 +193,21 @@ pub fn produce(
     info: &mut LessonInfo,
     p: &Progress,
 ) -> Result<()> {
+    let mut lesson = write_script(material, dir, opts, video, info, p)?;
+    record_voices(&mut lesson, dir, &voice, p)?;
+    drop(voice);
+    render_videos(&mut lesson, dir, video, p)
+}
+
+/// Step 1: the script, quiz and info.json.
+pub fn write_script(
+    material: &str,
+    dir: &Path,
+    opts: &script::ScriptOptions,
+    video: &VideoOptions,
+    info: &mut LessonInfo,
+    p: &Progress,
+) -> Result<Lesson> {
     let provider_name = match opts.provider {
         script::Provider::Gemini => "Gemini",
         script::Provider::Claude => "Claude",
@@ -215,15 +230,16 @@ pub fn produce(
     ));
     p.done();
     p.check()?;
+    Ok(lesson)
+}
 
+/// Step 2: the voices.
+pub fn record_voices(lesson: &mut Lesson, dir: &Path, voice: &tts::Voice, p: &Progress) -> Result<()> {
     p.start(Stage::Voices, format!("Recording voices: {}", voice.describe()));
-    tts::voice_lesson(&mut lesson, dir, &voice, p)?;
-    drop(voice);
+    tts::voice_lesson(lesson, dir, voice, p)?;
     lesson.save(dir)?;
     p.done();
-    p.check()?;
-
-    render_videos(&mut lesson, dir, video, p)
+    p.check()
 }
 
 // ------------------------------------------------------------------ courses
@@ -276,7 +292,14 @@ pub fn plan_course(o: &CourseOptions, p: &Progress, on_dir: impl FnOnce(&Path)) 
 /// Make the videos of a planned course (all, or only the 1-based numbers in `only`).
 /// Videos that already have a video.mp4 are skipped, so this resumes after a stop.
 /// Each video is a normal lesson folder inside the course folder (`01-chapter-1-…`).
+///
+/// The three slow steps run as an overlapping pipeline: while video N renders (CPU), video N+1
+/// records its voices (GPU) and video N+2's script is written (network). A course takes about as
+/// long as its voices alone. Progress: `Video i/N: title` when a video starts (its script), and
+/// every detail line is tagged `[i/N]`.
 pub fn build_course(dir: &Path, o: &CourseOptions, only: &[usize], p: &Progress) -> Result<Vec<PathBuf>> {
+    use std::sync::mpsc::sync_channel;
+
     let plan = crate::course::Plan::load(dir)?;
     let material = std::fs::read_to_string(dir.join("material.txt")).context("the course folder has no material.txt")?;
     render::ffmpeg()?;
@@ -285,6 +308,17 @@ pub fn build_course(dir: &Path, o: &CourseOptions, only: &[usize], p: &Progress)
         None => (material.as_str(), ""),
     };
     let total = plan.videos.len();
+
+    // what to make (cheap, done up front)
+    struct Job {
+        i: usize,
+        title: String,
+        dir: PathBuf,
+        material: String,
+        opts: script::ScriptOptions,
+        info: LessonInfo,
+    }
+    let mut jobs = vec![];
     let mut made = vec![];
     for (i, v) in plan.videos.iter().enumerate() {
         if !only.is_empty() && !only.contains(&(i + 1)) {
@@ -293,12 +327,9 @@ pub fn build_course(dir: &Path, o: &CourseOptions, only: &[usize], p: &Progress)
         let vdir = dir.join(v.folder(i));
         if vdir.join("video.mp4").exists() {
             p.info(format!("Video {}/{total} \"{}\" is already made", i + 1, v.title));
-            made.push(vdir);
+            made.push((i, vdir));
             continue;
         }
-        p.check()?;
-        p.info(format!("Video {}/{total}: {}", i + 1, v.title));
-        std::fs::create_dir_all(&vdir)?;
         let (part, found) = match crate::course::slice(body, v) {
             Some(s) => (s.to_string(), true),
             None => (body.to_string(), false),
@@ -313,8 +344,7 @@ pub fn build_course(dir: &Path, o: &CourseOptions, only: &[usize], p: &Progress)
         if !visuals.is_empty() {
             focus.push_str(" The diagram notes at the end cover the whole document; use only the ones that belong to this part.");
         }
-        std::fs::write(vdir.join("material.txt"), &part)?;
-        let mut info = LessonInfo {
+        let info = LessonInfo {
             title: v.title.clone(),
             duration: 0.0,
             style: o.video.style.unwrap_or_default().name().to_string(),
@@ -322,7 +352,6 @@ pub fn build_course(dir: &Path, o: &CourseOptions, only: &[usize], p: &Progress)
             focus: Some(focus.clone()),
             created: now_secs(),
         };
-        info.save(&vdir)?;
         let opts = script::ScriptOptions {
             scenes: None,
             focus: Some(focus),
@@ -332,11 +361,69 @@ pub fn build_course(dir: &Path, o: &CourseOptions, only: &[usize], p: &Progress)
             provider: o.provider,
             recipe: v.recipe,
         };
-        let voice = tts::Voice::new(&o.voice)?;
-        produce(&format!("{part}\n{visuals}"), &vdir, &opts, voice, &o.video, &mut info, p)?;
-        made.push(vdir);
+        jobs.push(Job { i, title: v.title.clone(), dir: vdir, material: format!("{part}\n{visuals}"), opts, info });
     }
-    Ok(made)
+    if jobs.is_empty() {
+        made.sort();
+        return Ok(made.into_iter().map(|(_, d)| d).collect());
+    }
+
+    // script -> voices -> render, one bounded handoff between each
+    let (to_voices, voices_in) = sync_channel::<(usize, PathBuf, Lesson)>(1);
+    let (to_render, render_in) = sync_channel::<(usize, PathBuf, Lesson)>(1);
+    let tag = |i: usize| p.tagged(format!("{}/{total}", i + 1));
+    let results = std::thread::scope(|s| {
+        let scripts = s.spawn(move || -> Result<()> {
+            for mut j in jobs {
+                p.check()?;
+                p.info(format!("Video {}/{total}: {}", j.i + 1, j.title));
+                std::fs::create_dir_all(&j.dir)?;
+                std::fs::write(j.dir.join("material.txt"), &j.material)?;
+                j.info.save(&j.dir)?;
+                let lesson = write_script(&j.material, &j.dir, &j.opts, &o.video, &mut j.info, &tag(j.i))?;
+                if to_voices.send((j.i, j.dir, lesson)).is_err() {
+                    break; // a later step failed; its error is reported
+                }
+            }
+            Ok(())
+        });
+        let voices = s.spawn(move || -> Result<()> {
+            let mut voice: Option<tts::Voice> = None;
+            for (i, vdir, mut lesson) in voices_in {
+                let v = match &voice {
+                    Some(v) => v,
+                    None => voice.insert(tts::Voice::new(&o.voice)?),
+                };
+                record_voices(&mut lesson, &vdir, v, &tag(i))?;
+                if to_render.send((i, vdir, lesson)).is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        });
+        let renders = s.spawn(move || -> Result<Vec<(usize, PathBuf)>> {
+            let mut done = vec![];
+            for (i, vdir, mut lesson) in render_in {
+                render_videos(&mut lesson, &vdir, &o.video, &tag(i))?;
+                tag(i).info("✅ done");
+                done.push((i, vdir));
+            }
+            Ok(done)
+        });
+        let join = |h: std::thread::ScopedJoinHandle<'_, Result<()>>| h.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a worker thread panicked")));
+        let r_render = renders.join().unwrap_or_else(|_| Err(anyhow::anyhow!("the render thread panicked")));
+        let r_voices = join(voices);
+        let r_scripts = join(scripts);
+        (r_scripts, r_voices, r_render)
+    });
+    let (r_scripts, r_voices, r_render) = results;
+    // report the earliest failure in the chain (a later step stopping is just a consequence)
+    let rendered = r_render?;
+    r_voices?;
+    r_scripts?;
+    made.extend(rendered);
+    made.sort();
+    Ok(made.into_iter().map(|(_, d)| d).collect())
 }
 
 /// Re-generate the voices of a lesson, then re-render it.

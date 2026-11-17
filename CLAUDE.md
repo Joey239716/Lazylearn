@@ -119,7 +119,12 @@ videos. `course::plan` (Gemini via `gemini::ask_json`) returns a `Plan` of `Plan
 covers, start, end, focus, minutes }`; `start`/`end` are verbatim phrases from the material, matched
 case/whitespace-insensitively by `course::slice` (fallback: whole material + "cover ONLY …" in the focus).
 Saved as `<course>/plan.json` + `material.txt`; each video is a normal lesson folder `<course>/NN-slug/`.
-`build_course` skips videos that already have `video.mp4` (resume). Recipes (`script::Recipe`: overview,
+`build_course` skips videos that already have `video.mp4` (resume) and runs as an **overlapping pipeline**:
+three threads (scripts → voices → render) joined by bounded channels, so video N renders (CPU) while N+1
+records voices (GPU) and N+2's script is written (network); a course takes about as long as its voices.
+`Video i/N: title` is emitted when a video's script starts; each video's own events go through
+`Progress::tagged("i/N")` (messages prefixed `[i/N] `, shared cancel). Single lessons use `produce`
+(= `write_script` → `record_voices` → `render_videos`). Recipes (`script::Recipe`: overview,
 terms, questions, cram) add a VIDEO FORMAT section to the script prompt; `make --recipe` uses them for one video.
 The visual notes (`pipeline::VISUALS_HEADER` section) are whole-document, so they're appended to every slice.
 App: the New-lesson composer's text box should be the course **direction**; show the plan for confirmation.
