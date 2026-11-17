@@ -23,6 +23,8 @@ pub struct Project {
     pub course: Option<Course>,
     /// the course folder this video belongs to
     pub parent: Option<PathBuf>,
+    /// watched to the end at least once (`.watched`)
+    pub watched: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -37,6 +39,13 @@ impl Course {
     pub fn made(&self) -> usize {
         self.videos.iter().filter(|d| d.join("video.mp4").is_file()).count()
     }
+    pub fn watched(&self) -> usize {
+        self.videos.iter().filter(|d| d.join(".watched").exists()).count()
+    }
+}
+
+pub fn mark_watched(dir: &Path) {
+    let _ = std::fs::write(dir.join(".watched"), stickstudy::pipeline::now_secs().to_string());
 }
 
 /// A course folder: has a plan, or the app marked it as one before planning.
@@ -90,6 +99,7 @@ impl Project {
             question_count,
             course: None,
             parent: None,
+            watched: dir.join(".watched").exists(),
         })
     }
 
@@ -124,10 +134,11 @@ impl Project {
             thumb: children.iter().find_map(|c| c.thumb.clone()),
             video: None,
             vertical_video: None,
-            quiz: None,
+            quiz: QuizResult::load(dir),
             question_count: children.iter().map(|c| c.question_count).sum(),
             course: Some(Course { plan, videos }),
             parent: None,
+            watched: false,
         };
         Some((me, children))
     }
@@ -199,7 +210,13 @@ pub struct QuizFile {
     pub questions: Vec<stickstudy::lesson::Quiz>,
 }
 
+/// A lesson's quiz; for a project (course), every made video's questions in order (the review quiz).
 pub fn load_quiz(dir: &Path) -> Vec<stickstudy::lesson::Quiz> {
+    if is_course(dir) {
+        return stickstudy::course::Plan::load(dir)
+            .map(|p| p.videos.iter().enumerate().flat_map(|(i, v)| load_quiz(&dir.join(v.folder(i)))).collect())
+            .unwrap_or_default();
+    }
     std::fs::read_to_string(dir.join("quiz.json"))
         .ok()
         .and_then(|s| serde_json::from_str::<QuizFile>(&s).ok())

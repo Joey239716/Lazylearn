@@ -33,6 +33,14 @@ enum Page {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tab {
+    /// review sessions: several videos + quizzes
+    Projects,
+    /// standalone single videos
+    Videos,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Menu {
     Style,
     Cast,
@@ -50,6 +58,8 @@ enum Menu {
     SetPace,
     /// recipe of planned video i (course plan review)
     Recipe(usize),
+    /// 16:9 / 16:9 + 9:16 / 9:16 only
+    Format,
 }
 
 /// Options picked in the composer (start from the settings' defaults).
@@ -62,6 +72,8 @@ struct Draft {
     energy: String,
     pace: f32,
     vertical: bool,
+    /// only the 9:16 version
+    tall_only: bool,
     provider: String,
     course: bool,
 }
@@ -76,6 +88,7 @@ impl Draft {
             energy: s.energy.clone(),
             pace: s.pace,
             vertical: s.vertical,
+            tall_only: false,
             provider: s.provider.clone(),
             course: s.course_mode,
         }
@@ -99,6 +112,7 @@ pub struct LazyApp {
     handled: Vec<u64>,
     next_job: u64,
     sidebar_open: bool,
+    tab: Tab,
     // composer
     attachments: Vec<PathBuf>,
     prompt: Entity<TextareaState>,
@@ -216,6 +230,7 @@ impl LazyApp {
         let projects = library::scan(&settings.lessons_dir);
         let backfilled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         backfill(&projects, backfilled.clone());
+        let start_tab = if projects.iter().any(|p| p.is_course()) { Tab::Projects } else { Tab::Videos };
         let mut this = LazyApp {
             settings,
             projects,
@@ -224,6 +239,7 @@ impl LazyApp {
             handled: vec![],
             next_job: 1,
             sidebar_open: true,
+            tab: start_tab,
             attachments: vec![],
             prompt,
             draft,
@@ -380,6 +396,11 @@ impl LazyApp {
         self.scrub = None;
         self.page_scroll.set_offset(point(px(0.), px(0.)));
         if let Page::Project(d) = &page {
+            if let Some(p) = self.projects.iter().find(|p| &p.dir == d) {
+                self.tab = if p.is_course() || p.parent.is_some() { Tab::Projects } else { Tab::Videos };
+            } else if library::is_course(d) {
+                self.tab = Tab::Projects;
+            }
             self.player_vertical = false;
             self.open_player(d.clone(), false, window);
             window.focus(&self.focus, cx);
@@ -475,7 +496,7 @@ impl LazyApp {
             no_vision: !self.settings.vision,
             teaching: None,
             voice: self.voice_args(),
-            video: VideoOptions { style: Some(parse(&d.style)), vertical: d.vertical, ..Default::default() },
+            video: VideoOptions { style: Some(parse(&d.style)), vertical: d.vertical, vertical_only: d.tall_only, ..Default::default() },
             recipe: Recipe::default(),
         };
         let id = self.next_job;
@@ -500,7 +521,7 @@ impl LazyApp {
             no_vision: !self.settings.vision,
             teaching: None,
             voice: self.voice_args(),
-            video: VideoOptions { style: Some(parse(&d.style)), vertical: d.vertical, ..Default::default() },
+            video: VideoOptions { style: Some(parse(&d.style)), vertical: d.vertical, vertical_only: d.tall_only, ..Default::default() },
         }
     }
 
@@ -778,6 +799,10 @@ impl Render for LazyApp {
             if p.ended && self.quiz.is_none() {
                 if let Page::Project(d) = &self.page {
                     let d = d.clone();
+                    library::mark_watched(&d);
+                    if let Some(p) = self.projects.iter_mut().find(|p| p.dir == d) {
+                        p.watched = true;
+                    }
                     self.start_quiz(d);
                     self.set_theater(false, window);
                     self.page_scroll.scroll_to_bottom();
@@ -1030,6 +1055,10 @@ impl LazyApp {
             .iter()
             .filter(|p| q.is_empty() || p.title.to_lowercase().contains(&q))
             .filter(|p| !q.is_empty() || p.parent.is_none() || p.parent == open_course)
+            .filter(|p| {
+                let in_project = p.is_course() || p.parent.is_some();
+                !q.is_empty() || (self.tab == Tab::Projects) == in_project
+            })
             .enumerate()
             .map(|(i, p)| self.render_project_row(i, p, current.as_deref() == Some(&p.dir), cx).into_any_element())
             .collect();
@@ -1087,7 +1116,37 @@ impl LazyApp {
                     .child(theme::icon("search").size(px(14.)))
                     .child(div().flex_1().text_size(px(13.)).child(Input::new(&self.search).appearance(false).small())),
             )
-            .child(div().pt(px(14.)).pb(px(6.)).px(px(10.)).child(label("Lessons")))
+            .child(
+                div()
+                    .mt(px(12.))
+                    .mb(px(8.))
+                    .mx(px(4.))
+                    .p(px(3.))
+                    .flex()
+                    .rounded(px(8.))
+                    .bg(ca(0xffffff, 0.035))
+                    .children([(Tab::Projects, "Projects", "graduation-cap"), (Tab::Videos, "Videos", "film")].map(|(t, name, ic)| {
+                        let on = self.tab == t;
+                        div()
+                            .id(name)
+                            .flex_1()
+                            .h(px(26.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(6.))
+                            .rounded(px(6.))
+                            .text_size(px(12.))
+                            .cursor_pointer()
+                            .map(|d| if on { d.bg(surface2()).text_color(text()).shadow_sm() } else { d.text_color(faint()).hover(|s| s.text_color(text())) })
+                            .child(theme::icon(ic).size(px(13.)))
+                            .child(name)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.tab = t;
+                                cx.notify();
+                            }))
+                    })),
+            )
             .child(
                 div()
                     .id("projects")
@@ -1100,10 +1159,12 @@ impl LazyApp {
                     .children(items)
                     .when(empty, |d| {
                         d.child(
-                            div().px(px(10.)).py(px(8.)).text_size(px(13.)).text_color(faint()).child(if q.is_empty() {
-                                "Your lessons will show up here."
-                            } else {
+                            div().px(px(10.)).py(px(8.)).text_size(px(13.)).line_height(px(18.)).text_color(faint()).child(if !q.is_empty() {
                                 "No matches."
+                            } else if self.tab == Tab::Projects {
+                                "No projects yet. Make one from New lesson with the Project chip on: a review session with several videos and quizzes."
+                            } else {
+                                "No single videos yet."
                             }),
                         )
                     }),
@@ -1190,13 +1251,32 @@ impl LazyApp {
             (Some(c), false) => {
                 let n = c.videos.len();
                 let made = c.made();
+                let watched = c.watched();
+                let text_ = if c.plan.is_none() {
+                    "Not planned".to_string()
+                } else if made < n {
+                    format!("{made}/{n} videos made")
+                } else if watched >= n {
+                    format!("{n} videos · all watched")
+                } else {
+                    format!("{watched}/{n} watched")
+                };
                 div()
-                    .child(if c.plan.is_none() {
-                        "Not planned".to_string()
-                    } else if made == n {
-                        format!("{n} videos · {}", library::ago(p.created))
-                    } else {
-                        format!("{made}/{n} videos made")
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .when(c.plan.is_some() && made == n && watched >= n, |d| d.child(dot(green())))
+                    .child(text_)
+                    .when_some(p.quiz.clone(), |d, q| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(3.))
+                                .text_color(if q.best >= q.total && q.total > 0 { green() } else { muted() })
+                                .child(theme::icon("check").size(px(11.)))
+                                .child(format!("{}/{}", q.best, q.total)),
+                        )
                     })
                     .into_any_element()
             }
@@ -1497,9 +1577,9 @@ impl LazyApp {
                             .cursor_pointer()
                             .hover(|s| s.bg(ca(0xf2b84b, 0.14)))
                             .child(theme::icon(if d.course { "graduation-cap" } else { "video" }).size(px(13.)))
-                            .child(if d.course { "Course" } else { "One video" })
+                            .child(if d.course { "Project" } else { "One video" })
                             .tooltip(|window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new("Course: Gemini splits your material into several videos. One video: a single lesson.")
+                                gpui_kit::component::tooltip::Tooltip::new("Project: a review session. Gemini splits your material into several videos, each with a quiz. One video: a single lesson.")
                                     .build(window, cx)
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1513,32 +1593,12 @@ impl LazyApp {
                     .child(self.chip(Menu::Cast, if d.cast == "solo" { "user" } else { "users" }, if d.cast == "solo" { "Solo".into() } else { "Duo".into() }, cx))
                     .child(self.chip(Menu::Teacher, "audio-lines", voices, cx))
                     .child(self.chip(Menu::Energy, "sparkles", cap(&d.energy), cx))
-                    .child(
-                        div()
-                            .id("vertical-chip")
-                            .h(px(30.))
-                            .px(px(10.))
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .rounded_full()
-                            .border_1()
-                            .text_size(px(13.))
-                            .cursor_pointer()
-                            .map(|e| {
-                                if d.vertical {
-                                    e.border_color(ca(0xf2b84b, 0.5)).bg(ca(0xf2b84b, 0.1)).text_color(gold())
-                                } else {
-                                    e.border_color(border2()).text_color(muted()).hover(|s| s.text_color(text()).bg(hover()))
-                                }
-                            })
-                            .child(theme::icon("smartphone").size(px(13.)))
-                            .child("9:16")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.draft.vertical = !this.draft.vertical;
-                                cx.notify();
-                            })),
-                    )
+                    .child(self.chip(
+                        Menu::Format,
+                        if d.tall_only { "smartphone" } else { "monitor" },
+                        if d.tall_only { "9:16".into() } else if d.vertical { "16:9 + 9:16".into() } else { "16:9".into() },
+                        cx,
+                    ))
                     .child(div().flex_1())
                     .child(
                         div()
@@ -1647,6 +1707,17 @@ impl LazyApp {
                     items.push((cap(v), desc.into(), s.provider == v, v.into()));
                 }
             }
+            Menu::Format => {
+                title = "Video shape";
+                let cur = if d.tall_only { "tall" } else if d.vertical { "both" } else { "wide" };
+                for (v, lab, desc) in [
+                    ("wide", "16:9", "Widescreen, 1920×1080 (default)"),
+                    ("both", "16:9 + 9:16", "Also a vertical version for Shorts, TikTok and Reels"),
+                    ("tall", "9:16 only", "Just the vertical version, 1080×1920"),
+                ] {
+                    items.push((lab.to_string(), desc.to_string(), cur == v, v.to_string()));
+                }
+            }
             Menu::Recipe(i) => {
                 title = "Video format";
                 let cur = match &self.page {
@@ -1747,6 +1818,10 @@ impl LazyApp {
             Menu::Student => d.student = val.into(),
             Menu::Energy => d.energy = val.into(),
             Menu::Pace => d.pace = val.parse().unwrap_or(1.0),
+            Menu::Format => {
+                d.vertical = val == "both";
+                d.tall_only = val == "tall";
+            }
             Menu::Provider => {
                 s.provider = val.into();
                 d.provider = val.into();
@@ -1794,7 +1869,7 @@ impl LazyApp {
                 }
             }
         }
-        if !matches!(m, Menu::Style | Menu::Cast | Menu::Teacher | Menu::Student | Menu::Energy | Menu::Pace | Menu::Recipe(_)) {
+        if !matches!(m, Menu::Style | Menu::Cast | Menu::Teacher | Menu::Student | Menu::Energy | Menu::Pace | Menu::Recipe(_) | Menu::Format) {
             self.settings.save();
         }
         self.menu = None;
@@ -2092,13 +2167,13 @@ impl LazyApp {
     fn render_course(&self, dir: &Path, proj: Option<Project>, cx: &mut Context<Self>) -> impl IntoElement {
         let course = proj.as_ref().and_then(|p| p.course.clone());
         let plan = course.as_ref().and_then(|c| c.plan.clone());
-        let title = proj.as_ref().map(|p| p.title.clone()).unwrap_or_else(|| "Course".into());
+        let title = proj.as_ref().map(|p| p.title.clone()).unwrap_or_else(|| "Project".into());
         let job = self.job_for(dir).map(|j| (j.kind, j.state.clone(), j.finished()));
         let running = job.as_ref().map(|j| !j.2).unwrap_or(false);
         let building = running && job.as_ref().map(|j| j.0 == JobKind::Course).unwrap_or(false);
         let n = plan.as_ref().map(|p| p.videos.len()).unwrap_or(0);
         let made = course.as_ref().map(|c| c.made()).unwrap_or(0);
-        let mut meta = vec!["Course".to_string()];
+        let mut meta = vec!["Project".to_string()];
         if n > 0 {
             meta.push(format!("{n} videos"));
         }
@@ -2130,7 +2205,7 @@ impl LazyApp {
                             .text_size(px(12.))
                             .text_color(gold())
                             .child(theme::icon("graduation-cap").size(px(13.)))
-                            .child("Course"),
+                            .child("Review project"),
                     )
                     .child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).line_height(px(28.)).child(title))
                     .child(div().text_size(px(13.)).text_color(faint()).child(meta[1..].join("  ·  "))),
@@ -2154,7 +2229,7 @@ impl LazyApp {
                             .text_color(c(0xffffff))
                             .cursor_pointer()
                             .hover(|s| s.bg(c(0xd23a55)))
-                            .child("Delete course")
+                            .child("Delete project")
                             .on_click(cx.listener(move |this, _, window, cx| this.delete(d3.clone(), window, cx)))
                             .into_any_element()
                     } else {
@@ -2254,6 +2329,7 @@ impl LazyApp {
                         .gap(px(8.))
                         .text_size(px(12.))
                         .text_color(faint())
+                        .when(vdir.join(".watched").exists(), |d| d.child(div().flex().items_center().gap(px(4.)).text_color(muted()).child(theme::icon("eye").size(px(12.)))))
                         .child(p.as_ref().map(|p| p.length_label()).unwrap_or_default())
                         .when_some(p.and_then(|p| p.quiz), |d, q| {
                             d.child(
@@ -2506,7 +2582,7 @@ impl LazyApp {
                                 .items_center()
                                 .gap(px(12.))
                                 .child(theme::icon("triangle-alert").size(px(16.)).text_color(gold()))
-                                .child(div().flex_1().text_size(px(14.)).text_color(muted()).child("This course wasn't planned yet."))
+                                .child(div().flex_1().text_size(px(14.)).text_color(muted()).child("This project wasn't planned yet."))
                                 .when(!retry_inputs.is_empty(), |d| {
                                     d.child(pill_btn("replan", "Plan it").on_click(cx.listener(move |this, _, _, cx| {
                                         this.start_plan(dd.clone(), retry_inputs.clone(), retry_dir.clone(), cx)
@@ -2514,7 +2590,9 @@ impl LazyApp {
                                 }),
                         )
                     })
+                    .when(made > 0, |d| d.child(self.render_project_progress(dir, course.as_ref(), cx)))
                     .children(plan_card)
+                    .when(made > 0 && !building, |d| d.child(self.render_quiz(dir, cx)))
                     .when_some(build_err, |d, e| {
                         d.child(
                             div()
@@ -2530,6 +2608,54 @@ impl LazyApp {
                         )
                     }),
             )
+    }
+
+    /// "2 of 5 watched" + Continue (next unwatched video).
+    fn render_project_progress(&self, dir: &Path, course: Option<&library::Course>, cx: &mut Context<Self>) -> impl IntoElement {
+        let videos: Vec<PathBuf> = course.map(|c| c.videos.clone()).unwrap_or_default();
+        let made: Vec<&PathBuf> = videos.iter().filter(|v| v.join("video.mp4").is_file()).collect();
+        let watched = made.iter().filter(|v| v.join(".watched").exists()).count();
+        let next = made.iter().find(|v| !v.join(".watched").exists()).or(made.first()).map(|v| (*v).clone());
+        let next_title = next.as_ref().and_then(|n| self.projects.iter().find(|p| &p.dir == n)).map(|p| p.title.clone()).unwrap_or_default();
+        let all = watched >= made.len() && !made.is_empty();
+        let quiz = self.projects.iter().find(|p| p.dir == dir).and_then(|p| p.quiz.clone());
+        let qsum: (usize, usize) = made
+            .iter()
+            .filter_map(|v| library::QuizResult::load(v))
+            .fold((0, 0), |a, r| (a.0 + r.best, a.1 + r.total));
+        let stat = |big: String, small: &'static str| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(div().text_size(px(20.)).font_weight(FontWeight::SEMIBOLD).child(big))
+                .child(div().text_size(px(12.)).text_color(faint()).child(small))
+        };
+        div()
+            .p(px(18.))
+            .rounded(px(14.))
+            .border_1()
+            .border_color(border())
+            .bg(surface())
+            .flex()
+            .items_center()
+            .gap(px(28.))
+            .child(stat(format!("{watched}/{}", made.len()), "videos watched"))
+            .child(stat(if qsum.1 > 0 { format!("{}/{}", qsum.0, qsum.1) } else { "–".into() }, "video quizzes (best)"))
+            .child(stat(quiz.map(|q| format!("{}/{}", q.best, q.total)).unwrap_or_else(|| "–".into()), "review quiz (best)"))
+            .child(div().flex_1())
+            .when_some(next, |d, n| {
+                d.child(
+                    pill_btn("continue", if all { "Watch again".to_string() } else if watched == 0 { "Start watching".to_string() } else { "Continue".to_string() })
+                        .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(next_title.clone()).build(window, cx))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_page(Page::Project(n.clone()), window, cx);
+                            if let Some(p) = &mut this.player {
+                                p.play();
+                            }
+                        })),
+                )
+            })
     }
 
     fn recipe_chip(&self, i: usize, r: Recipe, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2573,7 +2699,7 @@ impl LazyApp {
                     JobKind::Make => "Making your video",
                     JobKind::Render => "Re-rendering",
                     JobKind::Revoice => "Re-voicing",
-                    JobKind::Plan => "Planning the course",
+                    JobKind::Plan => "Planning the videos",
                     JobKind::Course => "Making the videos",
                 },
                 overall * 100.0
@@ -2890,6 +3016,7 @@ impl LazyApp {
                 return div().into_any_element();
             }
             let best = proj.and_then(|p| p.quiz.clone());
+            let is_project = proj.map(|p| p.is_course()).unwrap_or(false);
             let d = dir.to_path_buf();
             return card
                 .flex_row()
@@ -2911,10 +3038,11 @@ impl LazyApp {
                         .flex()
                         .flex_col()
                         .gap(px(3.))
-                        .child(div().text_size(px(15.)).font_weight(FontWeight::MEDIUM).child("Quiz time"))
-                        .child(div().text_size(px(13.)).text_color(muted()).child(match &best {
-                            Some(b) => format!("{n} questions · best score {}/{} · {} attempt{}", b.best, b.total, b.attempts, if b.attempts == 1 { "" } else { "s" }),
-                            None => format!("{n} questions. Opens when the video ends, or take it now."),
+                        .child(div().text_size(px(15.)).font_weight(FontWeight::MEDIUM).child(if is_project { "Review quiz" } else { "Quiz time" }))
+                        .child(div().text_size(px(13.)).text_color(muted()).child(match (&best, is_project) {
+                            (Some(b), _) => format!("{n} questions · best score {}/{} · {} attempt{}", b.best, b.total, b.attempts, if b.attempts == 1 { "" } else { "s" }),
+                            (None, true) => format!("All {n} questions from every video in this project, in one go."),
+                            (None, false) => format!("{n} questions. Opens when the video ends, or take it now."),
                         })),
                 )
                 .child(pill_btn("take-quiz", if best.is_some() { "Retake quiz" } else { "Take the quiz" }).on_click(cx.listener(move |this, _, window, cx| {
@@ -3193,7 +3321,7 @@ impl LazyApp {
                     .child(row("Energy", "How lively the voices sound.".into(), self.setting_chip(Menu::SetEnergy, cap(&s.energy), cx)))
                     .child(row("Pace", "Speed every line up without changing pitch.".into(), self.setting_chip(Menu::SetPace, format!("{:.1}×", s.pace), cx)))
                     .child(row(
-                        "Also make a 9:16 version",
+                        "Also make a 9:16 version (16:9 is always made)",
                         "For Shorts, TikTok and Reels.".into(),
                         toggle("vertical", s.vertical, cx.listener(|this, _, _, cx| {
                             this.settings.vertical = !this.settings.vertical;
