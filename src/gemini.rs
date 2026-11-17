@@ -26,6 +26,36 @@ pub fn ask_gemini(prompt: &str, schema: &Value, model: Option<&str>) -> Result<L
     ask_gemini_agy(prompt, schema, model)
 }
 
+/// Any structured request (not a lesson): the API if GEMINI_API_KEY is set, else `agy`.
+pub fn ask_json(prompt: &str, schema: &Value, model: Option<&str>) -> Result<Value> {
+    if let Some(key) = std::env::var("GEMINI_API_KEY").ok().filter(|k| !k.trim().is_empty()) {
+        let model = model.unwrap_or("gemini-2.5-flash");
+        let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={}", key.trim());
+        let body = serde_json::json!({
+            "contents": [{ "parts": [{ "text": prompt }] }],
+            "generationConfig": { "response_mime_type": "application/json", "response_schema": schema }
+        });
+        let res = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(600))
+            .build()?
+            .post(url)
+            .json(&body)
+            .send()
+            .context("sending request to Gemini API")?;
+        if !res.status().is_success() {
+            let st = res.status();
+            bail!("Gemini API error {st}: {}", res.text().unwrap_or_default());
+        }
+        let v: Value = res.json()?;
+        let text = v
+            .pointer("/candidates/0/content/parts/0/text")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("no text returned in Gemini response"))?;
+        return serde_json::from_str(json_slice(text)).context("Gemini didn't return valid JSON");
+    }
+    run_agy(prompt, schema, model, None)
+}
+
 /// Direct Google Gemini REST API structured generation.
 pub fn ask_gemini_api(prompt: &str, schema: &Value, api_key: &str, model: Option<&str>) -> Result<Lesson> {
     let model = model.unwrap_or("gemini-2.5-flash");

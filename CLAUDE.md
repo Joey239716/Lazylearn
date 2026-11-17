@@ -106,6 +106,19 @@ when building. ffmpeg must be on PATH or in `STICKSTUDY_FFMPEG`. `STICKSTUDY_CLA
 6. **Audio** (`audio.rs`): voice clips RMS-normalized, sfx synthesized in code, music = generated lo-fi loop
    (or `--music`), ducked under speech, soft limiter. No loudnorm (it pumped the music up between lines).
 
+## Courses (course.rs, pipeline::plan_course / build_course)
+
+The user's main use: paste a lot of material + a plain-language **direction** ("split by chapter; I only need
+term definitions and how to answer the end-of-chapter questions, plus a solid understanding") and get several
+videos. `course::plan` (Gemini via `gemini::ask_json`) returns a `Plan` of `PlannedVideo { title, recipe,
+covers, start, end, focus, minutes }`; `start`/`end` are verbatim phrases from the material, matched
+case/whitespace-insensitively by `course::slice` (fallback: whole material + "cover ONLY …" in the focus).
+Saved as `<course>/plan.json` + `material.txt`; each video is a normal lesson folder `<course>/NN-slug/`.
+`build_course` skips videos that already have `video.mp4` (resume). Recipes (`script::Recipe`: overview,
+terms, questions, cram) add a VIDEO FORMAT section to the script prompt; `make --recipe` uses them for one video.
+The visual notes (`pipeline::VISUALS_HEADER` section) are whole-document, so they're appended to every slice.
+App: the New-lesson composer's text box should be the course **direction**; show the plan for confirmation.
+
 ## Shot kinds (lesson.json)
 
 `talk` (cast close-up + speech bubble), `title` (kinetic words), `icon` (hero prop), `list`, `flow`, `cycle`,

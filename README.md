@@ -35,11 +35,39 @@ Pass several files to combine them into one lesson.
 - **TikTok-style captions**, with the word being spoken highlighted.
 - **Background music** that gets quieter under the voice: a built-in lo-fi loop, or your own track.
 
+
+## Courses: split material into several videos
+
+Got a whole textbook, a pile of readings, or a semester of slides? Describe what you need in plain words
+and Lazylearn plans a series of videos, then makes them:
+
+```bash
+stickstudy course reader.pdf -d "Split it by chapter. I only need the term definitions and how to answer
+the questions at the end of each chapter, plus a solid enough understanding of the material."
+```
+
+Gemini reads everything (including diagrams and scanned pages) and proposes a plan. Each video gets a part
+of the material and a **format**:
+
+| Format | What the video does |
+|---|---|
+| `overview` | understand the material: big picture, key ideas, examples, traps, recap |
+| `terms` | drill every key term: exact definition, example, memory hook, definition quizzes |
+| `questions` | how to answer the review / end-of-chapter questions: what each asks, key points, model answer, common mistake |
+| `cram` | only what's most likely to be tested, fast |
+
+You see the plan and confirm it before anything gets made. `--plan-only` saves it as `plan.json` so you can
+edit it (titles, formats, focus, which part each video covers). Run `stickstudy course <course folder>` to make
+it, or to continue after a stop: finished videos are skipped. `--only 2 5` makes just those videos. Each video
+is a normal lesson folder inside the course folder. A single video can use a format too:
+`stickstudy make notes.pdf --recipe terms`.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `stickstudy make <files…>` | Make a lesson video from your material |
+| `stickstudy course <files…> -d "…"` | Plan and make a series of videos (e.g. one per chapter) following your direction |
 | `stickstudy render <lesson>` | Render the video again (try another `--style`, `--vertical`, other music) without rewriting or re-voicing |
 | `stickstudy revoice <lesson> --voice openai` | Swap the voice engine, then render again |
 | `stickstudy frames <lesson>` | Save a still of every shot as a PNG (a quick check of the look) |

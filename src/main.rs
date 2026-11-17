@@ -79,8 +79,48 @@ enum Cmd {
         /// Skip Gemini's reading pass over diagrams, charts, slide images and scanned pages
         #[arg(long)]
         no_vision: bool,
+        /// Kind of video: overview, terms (definition drill), questions (how to answer them), cram
+        #[arg(long, value_enum, default_value_t = script::Recipe::Overview)]
+        recipe: script::Recipe,
         /// Replace the teaching-style instructions with the contents of this file
         /// (see `stickstudy prompt` for the default)
+        #[arg(long)]
+        teaching: Option<PathBuf>,
+        #[command(flatten)]
+        voice: tts::VoiceArgs,
+        #[command(flatten)]
+        video: VideoArgs,
+    },
+    /// Split material into several videos following a direction (e.g. one per chapter), then make them.
+    /// Run it again on the course folder to resume, or after editing its plan.json.
+    Course {
+        /// Material files, or an existing course folder (with plan.json) to resume
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
+        /// Course folder (default: lessons/<first file name>)
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// How to split it and what you need, in plain words, e.g.
+        /// "split by chapter; I only need the term definitions and how to answer the end-of-chapter questions"
+        #[arg(short, long, default_value = "")]
+        direction: String,
+        /// Don't ask before making the videos
+        #[arg(short, long)]
+        yes: bool,
+        /// Only make the plan (edit plan.json, then run `stickstudy course <folder>`)
+        #[arg(long)]
+        plan_only: bool,
+        /// Only make these videos (numbers from the plan), e.g. --only 1 3
+        #[arg(long, num_args = 1..)]
+        only: Vec<usize>,
+        #[arg(long, value_enum, default_value_t = script::CastMode::Duo)]
+        cast: script::CastMode,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long, value_enum, default_value_t = script::Provider::Gemini)]
+        provider: script::Provider,
+        #[arg(long)]
+        no_vision: bool,
         #[arg(long)]
         teaching: Option<PathBuf>,
         #[command(flatten)]
@@ -134,7 +174,7 @@ fn main() {
 fn run() -> Result<()> {
     let p = Progress::cli();
     match Cli::parse().cmd {
-        Cmd::Make { inputs, out, cast, scenes, focus, model, provider, no_vision, teaching, voice, video } => {
+        Cmd::Make { inputs, out, cast, scenes, focus, model, provider, no_vision, recipe, teaching, voice, video } => {
             let teaching = match teaching {
                 Some(f) => Some(std::fs::read_to_string(&f).with_context(|| format!("reading {}", f.display()))?),
                 None => None,
@@ -148,12 +188,61 @@ fn run() -> Result<()> {
                 focus,
                 model,
                 provider,
+                recipe,
                 no_vision,
                 teaching,
                 voice,
                 video: video.into(),
             };
             pipeline::make(&opts, &p, |_| {})?;
+        }
+        Cmd::Course { inputs, out, direction, yes, plan_only, only, cast, model, provider, no_vision, teaching, voice, video } => {
+            let teaching = match teaching {
+                Some(p) => Some(std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?),
+                None => None,
+            };
+            let p = Progress::cli();
+            let o = pipeline::CourseOptions {
+                inputs: inputs.clone(),
+                out,
+                lessons_dir: PathBuf::from("lessons"),
+                direction,
+                cast,
+                model,
+                provider,
+                no_vision,
+                teaching,
+                voice,
+                video: video.into(),
+            };
+            let resume = inputs.len() == 1 && inputs[0].is_dir() && inputs[0].join("plan.json").exists();
+            let (dir, plan) = if resume {
+                eprintln!("📂 Resuming the course in {}", inputs[0].display());
+                (inputs[0].clone(), stickstudy::course::Plan::load(&inputs[0])?)
+            } else {
+                pipeline::plan_course(&o, &p, |_| {})?
+            };
+            plan.print();
+            if plan_only {
+                eprintln!("Plan saved to {}. Edit it if you like, then run:
+  stickstudy course {}", dir.join("plan.json").display(), dir.display());
+                return Ok(());
+            }
+            if !yes {
+                eprint!("Make these {} videos? [Y/n] ", plan.videos.len());
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                if answer.trim().to_lowercase().starts_with('n') {
+                    eprintln!("Okay. The plan is saved; run `stickstudy course {}` when you're ready.", dir.display());
+                    return Ok(());
+                }
+            }
+            let made = pipeline::build_course(&dir, &o, &only, &p)?;
+            eprintln!("
+✅ Course ready: {} video(s) in {}", made.len(), dir.display());
+            for d in &made {
+                eprintln!("   {}", d.join("video.mp4").display());
+            }
         }
         Cmd::Render { dir, video } => {
             let mut lesson = Lesson::load(&dir)?;

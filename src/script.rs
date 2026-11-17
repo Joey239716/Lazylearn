@@ -29,6 +29,40 @@ pub enum Provider {
     Claude,
 }
 
+/// What kind of video to make from the material. A course plan picks one per video.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Recipe {
+    /// Understand the material: intuition, definitions, examples, traps, recap
+    #[default]
+    Overview,
+    /// Term drill: every key term with its exact definition, an example and a memory hook
+    Terms,
+    /// How to answer the review / end-of-chapter / discussion questions, with model answers
+    Questions,
+    /// Exam cram: only what is most likely to be tested, fast
+    Cram,
+}
+
+impl Recipe {
+    pub fn name(self) -> &'static str {
+        match self {
+            Recipe::Overview => "overview",
+            Recipe::Terms => "terms",
+            Recipe::Questions => "questions",
+            Recipe::Cram => "cram",
+        }
+    }
+    pub fn prompt(self) -> &'static str {
+        match self {
+            Recipe::Overview => "VIDEO FORMAT: OVERVIEW. Give the viewer a solid understanding of this material: the big picture first, then each key idea built step by step with intuition, precise definitions, examples and common traps, ending with a recap.",
+            Recipe::Terms => "VIDEO FORMAT: TERM DRILL. Cover every key term, concept and name in this material that a student could be asked to define. For each term: say it, give the exact exam-ready definition (a definition shot), a quick everyday example or analogy, and a memory hook. Group related terms into scenes of 3-6 terms; use compare shots for terms that are easy to confuse and mnemonic shots where an acronym helps. Every scene gets a quiz testing definitions. The final scene is a rapid-fire recap of all the terms (recap shot).",
+            Recipe::Questions => "VIDEO FORMAT: HOW TO ANSWER THE QUESTIONS. Teach the viewer how to answer the review, discussion or end-of-chapter questions for this material. If the material contains such questions, go through them in order (the most representative ones if there are many), one per scene: show the question (question shot), unpack what it is really asking, list the key points a strong answer must include (list or flow shots), give a model answer with a clear structure (main claim, evidence or example from the reading, explanation), and name the most common mistake. If the material has no questions, write the 3-6 questions an instructor would most likely ask and answer those. Quizzes test what a good answer must contain.",
+            Recipe::Cram => "VIDEO FORMAT: EXAM CRAM. Only what is most likely to be tested, as fast and dense as possible: key definitions, facts, formulas, processes and classic traps, with mnemonics. No long intuition-building. Quizzes on every scene.",
+        }
+    }
+}
+
 pub struct ScriptOptions {
     pub scenes: Option<u32>,
     pub focus: Option<String>,
@@ -37,6 +71,7 @@ pub struct ScriptOptions {
     pub teaching: Option<String>,
     pub cast: CastMode,
     pub provider: Provider,
+    pub recipe: Recipe,
 }
 
 /// The teaching instructions. Override with `--teaching my_style.md`
@@ -160,6 +195,8 @@ pub fn build_prompt(material: &str, opts: &ScriptOptions, p: &crate::progress::P
 TEACHING STYLE
 {style}
 
+{recipe}
+
 {shots}
 
 POSES (for every line: \"pose\" = the speaker's pose, \"listener_pose\" = the other character's)
@@ -181,6 +218,7 @@ CLASS MATERIAL
 {material}
 >>>"#,
         cast = cast_prompt(opts.cast),
+        recipe = opts.recipe.prompt(),
         poses = POSE_NAMES.join(", "),
     )
 }

@@ -4,7 +4,7 @@
 use crate::lesson::Lesson;
 use crate::progress::{Progress, Stage};
 use crate::{extract, render, script, styles, tts, vision};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -51,6 +51,8 @@ pub struct MakeOptions {
     pub focus: Option<String>,
     pub model: Option<String>,
     pub provider: script::Provider,
+    /// Kind of video (overview / terms / questions / cram)
+    pub recipe: script::Recipe,
     pub no_vision: bool,
     /// teaching-style instructions replacing the default
     pub teaching: Option<String>,
@@ -138,36 +140,7 @@ pub fn make(o: &MakeOptions, p: &Progress, on_dir: impl FnOnce(&Path)) -> Result
     info.save(&dir)?;
     on_dir(&dir);
 
-    // ---- read
-    p.start(Stage::Reading, "Reading your material…");
-    let visual_pass = o.provider == script::Provider::Gemini && !o.no_vision;
-    let mut material = extract::extract_all(&o.inputs, visual_pass, p)?;
-    p.done();
-    p.check()?;
-    if visual_pass {
-        p.start(Stage::Vision, "Gemini is reading the diagrams, charts and scans…");
-        let notes = vision::read_visuals(&o.inputs, &dir, None, p)?;
-        if !notes.is_empty() {
-            std::fs::write(dir.join("visuals.txt"), &notes)?;
-            material.push_str(&format!(
-                "=== Diagrams, charts, tables and scanned pages (read from the material's images) ===\n{notes}\n"
-            ));
-        }
-        p.done();
-        p.check()?;
-    }
-    if material.trim().is_empty() {
-        bail!("found nothing to learn from in the input files");
-    }
-    std::fs::write(dir.join("material.txt"), &material)?;
-    p.info(format!("{} characters of text extracted", material.len()));
-
-    // ---- script
-    let provider_name = match o.provider {
-        script::Provider::Gemini => "Gemini",
-        script::Provider::Claude => "Claude",
-    };
-    p.start(Stage::Script, format!("{provider_name} is writing the script and shot list…"));
+    let material = read_material(&o.inputs, &dir, o.provider == script::Provider::Gemini && !o.no_vision, p)?;
     let opts = script::ScriptOptions {
         scenes: o.scenes,
         focus: o.focus.clone(),
@@ -175,13 +148,61 @@ pub fn make(o: &MakeOptions, p: &Progress, on_dir: impl FnOnce(&Path)) -> Result
         teaching: o.teaching.clone(),
         cast: o.cast,
         provider: o.provider,
+        recipe: o.recipe,
     };
-    let mut lesson = script::write_lesson(&material, &opts, p)?;
-    lesson.style = o.video.style.unwrap_or_default();
-    lesson.save(&dir)?;
-    write_quiz(&lesson, &dir)?;
+    produce(&material, &dir, &opts, voice, &o.video, &mut info, p)?;
+    Ok(dir)
+}
+
+pub const VISUALS_HEADER: &str = "=== Diagrams, charts, tables and scanned pages (read from the material's images) ===";
+
+/// Extract the text and (Gemini) read the visuals; saves material.txt / visuals.txt in `dir`.
+pub fn read_material(inputs: &[PathBuf], dir: &Path, visual_pass: bool, p: &Progress) -> Result<String> {
+    p.start(Stage::Reading, "Reading your material…");
+    let mut material = extract::extract_all(inputs, visual_pass, p)?;
+    p.done();
+    p.check()?;
+    if visual_pass {
+        p.start(Stage::Vision, "Gemini is reading the diagrams, charts and scans…");
+        let notes = vision::read_visuals(inputs, dir, None, p)?;
+        if !notes.is_empty() {
+            std::fs::write(dir.join("visuals.txt"), &notes)?;
+            material.push_str(&format!("{VISUALS_HEADER}\n{notes}\n"));
+        }
+        p.done();
+        p.check()?;
+    }
+    if material.trim().is_empty() {
+        bail!("found nothing to learn from in the input files");
+    }
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(dir.join("material.txt"), &material)?;
+    p.info(format!("{} characters of text extracted", material.len()));
+    Ok(material)
+}
+
+/// Script → voices → quiz → video for one lesson folder. Consumes the voice engine so a local
+/// voice server stops before the CPU-heavy render.
+pub fn produce(
+    material: &str,
+    dir: &Path,
+    opts: &script::ScriptOptions,
+    voice: tts::Voice,
+    video: &VideoOptions,
+    info: &mut LessonInfo,
+    p: &Progress,
+) -> Result<()> {
+    let provider_name = match opts.provider {
+        script::Provider::Gemini => "Gemini",
+        script::Provider::Claude => "Claude",
+    };
+    p.start(Stage::Script, format!("{provider_name} is writing the script and shot list ({} video)…", opts.recipe.name()));
+    let mut lesson = script::write_lesson(material, opts, p)?;
+    lesson.style = video.style.unwrap_or_default();
+    lesson.save(dir)?;
+    write_quiz(&lesson, dir)?;
     info.title = lesson.title.clone();
-    info.save(&dir)?;
+    info.save(dir)?;
     let shots: usize = lesson.scenes.iter().flat_map(|s| &s.lines).map(|l| l.shots.len()).sum();
     p.info(format!(
         "\"{}\" — {} scenes, {} lines, {} shots, {} quiz questions",
@@ -194,17 +215,127 @@ pub fn make(o: &MakeOptions, p: &Progress, on_dir: impl FnOnce(&Path)) -> Result
     p.done();
     p.check()?;
 
-    // ---- voices
     p.start(Stage::Voices, format!("Recording voices: {}", voice.describe()));
-    tts::voice_lesson(&mut lesson, &dir, &voice, p)?;
-    drop(voice); // stops a local voice server before the CPU-heavy render
-    lesson.save(&dir)?;
+    tts::voice_lesson(&mut lesson, dir, &voice, p)?;
+    drop(voice);
+    lesson.save(dir)?;
     p.done();
     p.check()?;
 
-    // ---- video
-    render_videos(&mut lesson, &dir, &o.video, p)?;
-    Ok(dir)
+    render_videos(&mut lesson, dir, video, p)
+}
+
+// ------------------------------------------------------------------ courses
+
+/// Options for a course: several videos planned from one pile of material.
+#[derive(Clone)]
+pub struct CourseOptions {
+    pub inputs: Vec<PathBuf>,
+    /// Course folder (default: a new folder in `lessons_dir`)
+    pub out: Option<PathBuf>,
+    pub lessons_dir: PathBuf,
+    /// How to split it and what the student needs, in plain words
+    pub direction: String,
+    pub cast: script::CastMode,
+    pub model: Option<String>,
+    pub provider: script::Provider,
+    pub no_vision: bool,
+    pub teaching: Option<String>,
+    pub voice: tts::VoiceArgs,
+    pub video: VideoOptions,
+}
+
+/// Read the material and have Gemini plan the videos. Saves `material.txt` and `plan.json`
+/// in the course folder and returns it. Review/edit the plan, then call `build_course`.
+pub fn plan_course(o: &CourseOptions, p: &Progress, on_dir: impl FnOnce(&Path)) -> Result<(PathBuf, crate::course::Plan)> {
+    if o.inputs.is_empty() {
+        bail!("no input files");
+    }
+    for f in &o.inputs {
+        if !f.exists() {
+            bail!("file not found: {}", f.display());
+        }
+    }
+    let dir = o.out.clone().unwrap_or_else(|| {
+        let stem = o.inputs[0].file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or("course".into());
+        unique_dir(&o.lessons_dir, &stem)
+    });
+    std::fs::create_dir_all(&dir)?;
+    on_dir(&dir);
+    let material = read_material(&o.inputs, &dir, !o.no_vision, p)?;
+    p.start(Stage::Script, "Gemini is planning the videos…");
+    let body = material.split(VISUALS_HEADER).next().unwrap_or(&material);
+    let plan = crate::course::plan(body, &o.direction, None)?;
+    plan.save(&dir)?;
+    p.info(format!("{} videos planned", plan.videos.len()));
+    p.done();
+    Ok((dir, plan))
+}
+
+/// Make the videos of a planned course (all, or only the 1-based numbers in `only`).
+/// Videos that already have a video.mp4 are skipped, so this resumes after a stop.
+/// Each video is a normal lesson folder inside the course folder (`01-chapter-1-…`).
+pub fn build_course(dir: &Path, o: &CourseOptions, only: &[usize], p: &Progress) -> Result<Vec<PathBuf>> {
+    let plan = crate::course::Plan::load(dir)?;
+    let material = std::fs::read_to_string(dir.join("material.txt")).context("the course folder has no material.txt")?;
+    render::ffmpeg()?;
+    let (body, visuals) = match material.find(VISUALS_HEADER) {
+        Some(i) => (&material[..i], &material[i..]),
+        None => (material.as_str(), ""),
+    };
+    let total = plan.videos.len();
+    let mut made = vec![];
+    for (i, v) in plan.videos.iter().enumerate() {
+        if !only.is_empty() && !only.contains(&(i + 1)) {
+            continue;
+        }
+        let vdir = dir.join(v.folder(i));
+        if vdir.join("video.mp4").exists() {
+            p.info(format!("Video {}/{total} \"{}\" is already made", i + 1, v.title));
+            made.push(vdir);
+            continue;
+        }
+        p.check()?;
+        p.info(format!("Video {}/{total}: {}", i + 1, v.title));
+        std::fs::create_dir_all(&vdir)?;
+        let (part, found) = match crate::course::slice(body, v) {
+            Some(s) => (s.to_string(), true),
+            None => (body.to_string(), false),
+        };
+        let mut focus = format!("This video is titled \"{}\" and covers {}. {}", v.title, v.covers, v.focus);
+        if v.minutes > 0.0 {
+            focus.push_str(&format!(" Aim for about {:.0} minutes of speech.", v.minutes));
+        }
+        if !found {
+            focus.push_str(&format!(" The material below is the whole document: cover ONLY {}.", v.covers));
+        }
+        if !visuals.is_empty() {
+            focus.push_str(" The diagram notes at the end cover the whole document; use only the ones that belong to this part.");
+        }
+        std::fs::write(vdir.join("material.txt"), &part)?;
+        let mut info = LessonInfo {
+            title: v.title.clone(),
+            duration: 0.0,
+            style: o.video.style.unwrap_or_default().name().to_string(),
+            inputs: o.inputs.iter().map(|f| f.display().to_string()).collect(),
+            focus: Some(focus.clone()),
+            created: now_secs(),
+        };
+        info.save(&vdir)?;
+        let opts = script::ScriptOptions {
+            scenes: None,
+            focus: Some(focus),
+            model: o.model.clone(),
+            teaching: o.teaching.clone(),
+            cast: o.cast,
+            provider: o.provider,
+            recipe: v.recipe,
+        };
+        let voice = tts::Voice::new(&o.voice)?;
+        produce(&format!("{part}\n{visuals}"), &vdir, &opts, voice, &o.video, &mut info, p)?;
+        made.push(vdir);
+    }
+    Ok(made)
 }
 
 /// Re-generate the voices of a lesson, then re-render it.
