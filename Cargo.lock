@@ -3658,7 +3658,9 @@ name = "lazylearn"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "gpui-kit",
+ "image",
  "rodio",
  "serde",
  "serde_json",

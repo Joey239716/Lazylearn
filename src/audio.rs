@@ -287,7 +287,7 @@ pub fn lofi(len: usize) -> Vec<f32> {
 
 /// Decode any audio file to mono f32 at SR using ffmpeg.
 pub fn decode(ffmpeg: &str, path: &Path) -> Result<Vec<f32>> {
-    let out = std::process::Command::new(ffmpeg)
+    let out = crate::command(ffmpeg)
         .args(["-v", "error", "-i"])
         .arg(path)
         .args(["-ac", "1", "-ar", &SR.to_string(), "-f", "f32le", "-"])

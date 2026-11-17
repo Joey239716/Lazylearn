@@ -129,8 +129,9 @@ pub fn make(o: &MakeOptions, p: &Progress, on_dir: impl FnOnce(&Path)) -> Result
         unique_dir(&o.lessons_dir, &stem)
     });
     std::fs::create_dir_all(&dir)?;
+    // keep a title the caller may have set (the app shows the project right away)
     let mut info = LessonInfo {
-        title: String::new(),
+        title: LessonInfo::load(&dir).map(|i| i.title).unwrap_or_default(),
         duration: 0.0,
         style: o.video.style.unwrap_or_default().name().to_string(),
         inputs: o.inputs.iter().map(|f| f.display().to_string()).collect(),

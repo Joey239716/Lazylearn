@@ -7,7 +7,7 @@ use crate::timeline::{Renderer, Timeline};
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct RenderOptions {
@@ -27,7 +27,7 @@ pub struct RenderOptions {
 /// The ffmpeg binary: $STICKSTUDY_FFMPEG, else `ffmpeg` on PATH.
 pub fn ffmpeg() -> Result<String> {
     let bin = std::env::var("STICKSTUDY_FFMPEG").unwrap_or_else(|_| "ffmpeg".into());
-    match Command::new(&bin).arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status() {
+    match crate::command(&bin).arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status() {
         Ok(s) if s.success() => Ok(bin),
         _ => bail!(
             "ffmpeg not found. Install it (Windows: `winget install Gyan.FFmpeg`, macOS: download from \
@@ -117,7 +117,7 @@ pub fn render(lesson: &Lesson, dir: &Path, o: &RenderOptions, p: &crate::progres
     let list = work.join("parts.txt");
     let abs = |p: &PathBuf| std::path::absolute(p).unwrap_or_else(|_| p.clone()).display().to_string().replace('\\', "/");
     std::fs::write(&list, parts.iter().map(|p| format!("file '{}'\n", abs(p))).collect::<String>())?;
-    let st = Command::new(&ff)
+    let st = crate::command(&ff)
         .args(["-y", "-v", "error", "-f", "concat", "-safe", "0", "-i"])
         .arg(&list)
         .arg("-i")
@@ -136,7 +136,7 @@ pub fn render(lesson: &Lesson, dir: &Path, o: &RenderOptions, p: &crate::progres
 
 #[allow(clippy::too_many_arguments)]
 fn render_chunk(tl: &Timeline, ff: &str, f0: usize, f1: usize, o: &RenderOptions, part: &Path, done: &AtomicUsize, cancel: &std::sync::atomic::AtomicBool) -> Result<()> {
-    let mut child = Command::new(ff)
+    let mut child = crate::command(ff)
         .args(["-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{}x{}", o.width, o.height), "-r", &o.fps.to_string(), "-i", "-"])
         .args(["-c:v", "libx264", "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p", "-threads", "2", "-an"])
         .arg(part)

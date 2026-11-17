@@ -7,7 +7,7 @@ use crate::lesson::Lesson;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub fn agy_bin() -> String {
     std::env::var("STICKSTUDY_AGY")
@@ -118,7 +118,7 @@ pub fn run_agy(prompt: &str, schema: &Value, model: Option<&str>, workdir: Optio
     let temp_schema = std::env::temp_dir().join(format!("stickstudy_schema_{rand_id}.json"));
     std::fs::write(&temp_schema, serde_json::to_string(schema)?)?;
 
-    let mut cmd = Command::new(agy_bin());
+    let mut cmd = crate::command(agy_bin());
     cmd.args([
         "--json-schema",
         &temp_schema.to_string_lossy(),

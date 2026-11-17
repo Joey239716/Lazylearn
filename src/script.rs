@@ -7,7 +7,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
 use serde_json::{json, Value};
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 const MAX_MATERIAL_CHARS: usize = 150_000;
 
@@ -301,7 +301,7 @@ fn claude_bin() -> String {
 }
 
 fn ask_claude(prompt: &str, schema: &str, model: Option<&str>) -> Result<Lesson> {
-    let mut cmd = Command::new(claude_bin());
+    let mut cmd = crate::command(claude_bin());
     cmd.args([
         "-p",
         "--output-format",

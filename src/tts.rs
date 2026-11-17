@@ -135,7 +135,7 @@ impl Voice {
             Backend::Sapi => sapi_batch(&[(text.to_string(), voice.clone(), out.to_path_buf())], self.speed),
             Backend::Auto => unreachable!(),
             Backend::Say => {
-                let mut c = Command::new("say");
+                let mut c = crate::command("say");
                 c.args(["-v", voice, "--data-format=LEI16@22050", "-o"]).arg(out);
                 // Slightly brisk by default for a snappy, short-form feel.
                 c.args(["-r", &format!("{}", self.speed.unwrap_or(200.0) as u32)]);
@@ -144,13 +144,13 @@ impl Voice {
             }
             Backend::Piper => {
                 let bin = std::env::var("PIPER_BIN").unwrap_or_else(|_| "piper".into());
-                let mut c = Command::new(bin);
+                let mut c = crate::command(bin);
                 c.args(["--model", voice, "--output_file"]).arg(out);
                 run_with_stdin(c, text, "piper (install: `pip install piper-tts`)")
             }
             Backend::Espeak => {
                 let bin = if which("espeak-ng") { "espeak-ng" } else { "espeak" };
-                let mut c = Command::new(bin);
+                let mut c = crate::command(bin);
                 c.args(["-v", voice, "-w"]).arg(out);
                 if let Some(s) = self.speed {
                     c.args(["-s", &format!("{}", s as u32)]);
@@ -343,7 +343,7 @@ $s.Dispose()
     let mut bytes = vec![0xEF, 0xBB, 0xBF];
     bytes.extend_from_slice(script.as_bytes());
     std::fs::write(&ps1, bytes)?;
-    let out = Command::new("powershell")
+    let out = crate::command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&ps1)
         .output()
@@ -378,7 +378,7 @@ fn write_pcm16(out: &Path, bytes: &[u8], rate: u32) -> Result<()> {
 fn change_pace(path: &Path, pace: f32) -> Result<()> {
     let ff = crate::render::ffmpeg()?;
     let tmp = path.with_extension("pace.wav");
-    let st = Command::new(&ff)
+    let st = crate::command(&ff)
         .args(["-v", "error", "-y", "-i"])
         .arg(path)
         .args(["-af", &format!("atempo={pace}"), "-c:a", "pcm_s16le"])
@@ -405,7 +405,7 @@ fn run_with_stdin(mut c: Command, text: &str, what: &str) -> Result<()> {
 
 fn which(bin: &str) -> bool {
     let finder = if cfg!(windows) { "where" } else { "which" };
-    Command::new(finder).arg(bin).output().map(|o| o.status.success()).unwrap_or(false)
+    crate::command(finder).arg(bin).output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 /// `stickstudy voices` — show every engine and how to use it.
@@ -441,14 +441,14 @@ pub fn print_voice_guide() {
 
     if cfg!(windows) {
         let ps = "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name }";
-        if let Ok(out) = Command::new("powershell").args(["-NoProfile", "-Command", ps]).output() {
+        if let Ok(out) = crate::command("powershell").args(["-NoProfile", "-Command", ps]).output() {
             println!("Windows voices installed here (use with --voice sapi --teacher-voice \"<name>\"):");
             for l in String::from_utf8_lossy(&out.stdout).lines().filter(|l| !l.trim().is_empty()) {
                 println!("  {}", l.trim());
             }
         }
     }
-    if let Ok(out) = Command::new("say").args(["-v", "?"]).output() {
+    if let Ok(out) = crate::command("say").args(["-v", "?"]).output() {
         let list = String::from_utf8_lossy(&out.stdout);
         let novelty = [
             "Bad News", "Bahh", "Bells", "Boing", "Bubbles", "Cellos", "Good News", "Jester", "Organ",

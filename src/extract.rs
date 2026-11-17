@@ -4,7 +4,6 @@ use anyhow::{bail, Context, Result};
 use regex::Regex;
 use std::io::Read;
 use std::path::Path;
-use std::process::Command;
 
 /// `visual_pass`: images and scanned PDFs are allowed to have no text, because
 /// Gemini's reading pass (vision.rs) will read them instead.
@@ -54,7 +53,7 @@ fn pdf(path: &Path) -> Result<String> {
     match res {
         Ok(Ok(t)) if !t.trim().is_empty() => Ok(t),
         _ => {
-            let out = Command::new("pdftotext")
+            let out = crate::command("pdftotext")
                 .arg("-layout")
                 .arg(path)
                 .arg("-")

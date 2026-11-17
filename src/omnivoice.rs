@@ -12,7 +12,7 @@
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_TEACHER: &str = "The Champion";
@@ -148,7 +148,7 @@ impl Server {
         let port = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
         let log_path = std::env::temp_dir().join(format!("stickstudy-omnivoice-{port}.log"));
         let log = std::fs::File::create(&log_path)?;
-        let child = Command::new(&bin)
+        let child = crate::command(&bin)
             .arg("--model")
             .arg(&base)
             .arg("--codec")
