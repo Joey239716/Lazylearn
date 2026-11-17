@@ -15,12 +15,52 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-pub const DEFAULT_TEACHER: &str = "male, middle-aged, low pitch, american accent";
-pub const DEFAULT_STUDENT: &str = "female, young adult, high pitch, american accent";
+pub const DEFAULT_TEACHER: &str = "The Champion";
+pub const DEFAULT_STUDENT: &str = "The Neighbor";
 /// What a designed voice says once, to become the reference clip for every line.
+/// Every line copies this clip's delivery, so it is deliberately excited.
 const REF_TEXT: &str =
-    "Hey there! Today we're going to learn something really cool, and I promise it's going to be fun.";
-const REF_SEED: i64 = 1234;
+    "Oh wow, okay, you are going to LOVE this! This is honestly one of the coolest things in all of science!";
+const REF_SEED: i64 = 11;
+
+/// English voice presets from the VoiceStudio gallery (name -> voice-design description).
+pub const PRESETS: &[(&str, &str)] = &[
+    ("The Champion", "male, young adult, high pitch, american accent"),
+    ("The Neighbor", "female, young adult, moderate pitch, american accent"),
+    ("The Hype Host", "male, young adult, very high pitch, american accent"),
+    ("The Vlogger", "female, young adult, high pitch"),
+    ("The Upbeat", "female, young adult, high pitch, american accent"),
+    ("The Podcaster", "female, young adult, high pitch, australian accent"),
+    ("The Mate", "male, young adult, moderate pitch, australian accent"),
+    ("The Explainer", "male, young adult, moderate pitch, british accent"),
+    ("The Teacher", "female, middle-aged, moderate pitch, american accent"),
+    ("The Anchor", "male, middle-aged, moderate pitch, american accent"),
+    ("The Game Host", "male, middle-aged, moderate pitch"),
+    ("The Commentator", "male, middle-aged, high pitch, british accent"),
+    ("The Companion", "female, middle-aged, moderate pitch, canadian accent"),
+    ("The Helpdesk", "female, young adult, moderate pitch, indian accent"),
+    ("The Librarian", "female, middle-aged, low pitch, british accent"),
+    ("The Documentarian", "male, middle-aged, low pitch, american accent"),
+    ("The Calm Guide", "female, middle-aged, low pitch, whisper"),
+    ("The Storyteller", "male, elderly, low pitch, british accent"),
+    ("The Promo Voice", "male, middle-aged, low pitch"),
+    ("The Luxe", "female, middle-aged, moderate pitch, british accent"),
+    ("Captain Crusty", "male, elderly, very low pitch"),
+    ("Junior Quacks", "teenager, high pitch"),
+    ("The Pixie", "female, child, very high pitch"),
+    ("The Ogre", "male, middle-aged, very low pitch"),
+];
+
+/// A preset name ("The Champion", "champion") becomes its description; anything else passes through.
+pub fn resolve(spec: &str) -> String {
+    let k = spec.trim().to_lowercase();
+    let k = k.strip_prefix("the ").unwrap_or(&k);
+    PRESETS
+        .iter()
+        .find(|(n, _)| n.to_lowercase().strip_prefix("the ").unwrap_or(&n.to_lowercase()) == k)
+        .map(|(_, d)| d.to_string())
+        .unwrap_or_else(|| spec.to_string())
+}
 
 /// The OmniVoice folder, if it is set up.
 pub fn find_dir() -> Option<PathBuf> {
@@ -157,7 +197,7 @@ impl Server {
             })?;
             (wav, text.trim().to_string())
         } else {
-            (self.designed_clip(spec)?, REF_TEXT.to_string())
+            (self.designed_clip(&resolve(spec))?, REF_TEXT.to_string())
         };
         let name = format!("ss-{:x}", fxhash(spec));
         let resp = self
@@ -175,7 +215,8 @@ impl Server {
 
     /// A reference clip for a voice description, reused from the lesson folder when it exists.
     fn designed_clip(&self, desc: &str) -> Result<Vec<u8>> {
-        let cache = self.voices_dir.as_ref().map(|d| d.join(format!("{}.wav", slug(desc))));
+        let key = fxhash(&format!("{desc}|{REF_TEXT}|{REF_SEED}"));
+        let cache = self.voices_dir.as_ref().map(|d| d.join(format!("{}-{:08x}.wav", slug(desc), key as u32)));
         if let Some(c) = &cache {
             if let Ok(b) = std::fs::read(c) {
                 return Ok(b);

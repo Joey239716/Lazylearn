@@ -394,7 +394,11 @@ pub fn print_voice_guide() {
     println!("              male|female, child|teenager|young adult|middle-aged|elderly,");
     println!("              very low|low|moderate|high|very high pitch, whisper, american|british|australian|... accent");
     println!("              e.g. --teacher-voice \"female, middle-aged, low pitch, british accent\"");
-    println!("              or a .wav to clone (put its transcript in a .txt next to it).");
+    println!("              or a .wav to clone (put its transcript in a .txt next to it),");
+    println!("              or a gallery preset name (default: teacher \"The Champion\", student \"The Neighbor\"):");
+    for chunk in omnivoice::PRESETS.chunks(4) {
+        println!("                {}", chunk.iter().map(|(n, _)| format!("{n:<20}")).collect::<String>());
+    }
     println!("  elevenlabs  Most expressive. Paid/free tier.  export ELEVENLABS_API_KEY=…");
     println!("              voices are IDs from elevenlabs.io/app/voice-library (defaults: Adam, Rachel)");
     println!("  espeak      Retro robot voice, free. `brew install espeak-ng`  voices: en-us+m3, en-gb+f2, …");
