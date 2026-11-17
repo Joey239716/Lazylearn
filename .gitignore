@@ -1,3 +1,6 @@
 /target
-/lessons
+/lessons/*
+!/lessons/test/
+/lessons/test/*
+!/lessons/test/lesson.json
 .DS_Store

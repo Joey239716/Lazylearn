@@ -4,166 +4,140 @@ Context for any AI agent (or human) picking up this project. Read this before yo
 
 ## What this is
 
-A Rust desktop app that turns a student's class material (PDF slides, PowerPoint, lecture transcripts,
-notes) into short, fun, voiced animated lessons with quizzes. It runs locally on macOS.
+A Rust CLI that turns a student's class material (PDF slides, PowerPoint, lecture transcripts, notes) into a
+fun, fully animated, voiced **study video (MP4)**: doodle characters, props, diagrams, kinetic captions, sound
+effects and music. Quizzes are written alongside and are meant to be taken **after** the video.
+It runs on **Windows and macOS**.
 
-Pipeline: **extract text → Claude writes a lesson script (JSON) → TTS voices each line → interactive player**.
+Pipeline: **extract text → Claude writes the script + shot list (JSON) → TTS voices each line → timeline →
+frames rendered in parallel → ffmpeg MP4**.
 
-The lesson script is written by the user's local **Claude Code CLI** (`claude -p`), not the Anthropic API.
+The script is written by the user's local **Claude Code CLI** (`claude -p`), not the Anthropic API.
 The user has no API key, so don't add an API-key dependency for script writing.
+
+The pipeline was modeled on the user's hand-built EvenTheRain video project (`F:\EvenTheRain`, Python):
+per-element pop-in animation, sound effects, ducked music, burned-in captions, chunked parallel rendering.
 
 ## Product requirements (from the user)
 
-- **Content style:** TikTok / YouTube Shorts energy. Fun, concise, never boring, with a hook first. It must
-  still **teach from scratch**: define every term before using it and build step by step.
-- **Goals, all three:** understand concepts (intuition then precise definitions), exam prep (exact
-  definitions, common traps, worked examples), and memorization (mnemonics, repetition, recap).
-- **Length:** scales with the amount of material (not a fixed length).
-- **Quizzes:** multiple choice, on roughly every other scene, plus the final recap scene.
-- **Several video formats**, each with its own script instructions and visuals (see below). Keep adding
-  formats in this pattern.
-- **Several voice options**, from free and local up to paid and natural-sounding.
-- **Input formats:** PDF, .pptx, and transcripts (.vtt/.srt/.txt). Markdown also works.
-- The `explainer` format is *inspired by* high-production science-explainer channels (flat, colorful,
-  cosmic). Keep its art and mascot **original**; don't copy any specific channel's characters, branding or look.
+- **Output: MP4 only.** No live player. Clickable quizzes come **after** the video (planned: `stickstudy watch`
+  plays the MP4, then opens a small quiz window built from `quiz.json`).
+- **Animations and transitions are the top priority.** It's meant to be a fun alternative to studying. Many
+  shots (more than one per 1–2 sentences is fine), every element animates in, every cut has a transition.
+- **Content style:** TikTok / YouTube Shorts energy, hook first, but still **teach from scratch**
+  (define every term, build step by step). Goals: understanding, exam prep, memorization.
+- **Visuals:** Claude composes shots from a fixed vocabulary of shot kinds + a prop (icon) library.
+  Several visual **styles** share the same shots and props.
+- **Voice:** TTS only (no recording). Free local default per OS, paid options available.
+- **Extras:** sound effects, music with ducking, burned-in captions + `.srt`, 9:16 vertical export.
+- **Length** scales with the material. **Inputs:** PDF, .pptx, .vtt/.srt/.txt, .md.
+- Keep art **original** (don't copy any channel's characters or branding).
 
 ## Repo layout
 
 ```
 Cargo.toml
+assets/fonts/   LilitaOne (display) + PatrickHand (handwriting), OFL, embedded with include_bytes!
 src/
-  main.rs       CLI (clap): make / play / revoice / voices / formats / style
-  lesson.rs     Data model (Lesson, Scene, Line, Quiz, Visual, Pose, Shape, Layout) + load/save/sanitize
-  extract.rs    Text extraction: PDF (pdf-extract, falls back to pdftotext), PPTX (zip + regex on <a:t>), VTT/SRT cleanup
-  formats.rs    Format enum + per-format prompt text + capability flags (narrated / uses_poses / uses_visuals)
-  script.rs     Builds the prompt + JSON schema per format, shells out to `claude -p`, parses and validates
-  tts.rs        Voice backends -> one WAV per line; fills Line.audio + Line.duration
-  player.rs     macroquad window: timing, audio (rodio), input, header/progress bar, subtitles, quiz, end screen,
-                stickman stage; dispatches the other formats to looks.rs
-  looks.rs      Renderers for the explainer, whiteboard and chat formats
-  stickman.rs   Procedural stick figure rig (joint angles), poses, drawing, blinking, lip-flap
+  main.rs       CLI (clap): make / render / revoice / frames / voices / styles / prompt
+  lesson.rs     Data model: Lesson, Scene, Line, Shot (+ShotKind), Item, Quiz, Pose + sanitize
+  extract.rs    Text extraction: PDF (pdf-extract, falls back to pdftotext), PPTX (zip + regex), VTT/SRT cleanup
+  script.rs     Prompt (cast + teaching style + SHOT_GUIDE) + JSON schema, shells out to `claude -p`
+  tts.rs        Voice backends -> one WAV per line; fills Line.audio / audio_start / duration (silence trimmed)
+  gfx.rs        tiny-skia canvas: transform/alpha stack, shapes, arrows, path trimming, vector text, easing
+  styles.rs     Style enum (doodle/cosmic/whiteboard/chalk) -> Theme (palette, line weight, fonts) + backgrounds
+  character.rs  Doodle cast rig: joint angles, poses, blending, blinking, lip-sync from the audio envelope
+  icons.rs      Prop library (~90 line-art icons, several animated) + alias/keyword matching + letter-badge fallback
+  shots.rs      Per shot kind: `plan` (element beat times + sfx cues) and `draw` (layout + entrances); intro/outro/chapter cards
+  timeline.rs   Lays everything out in time (segments, transitions, captions, sfx, poses) + Renderer::frame(t)
+  audio.rs      Synthesized sfx, generated lo-fi music, voice mixing, ducking, soft limiter
+  render.rs     Parallel chunk rendering into ffmpeg, concat + audio, .srt, snapshots
 samples/photosynthesis.txt   Small test lecture
 lessons/                     Generated lessons (gitignored)
 ```
 
 ## Build and run
 
-Rust was installed with rustup (`~/.cargo/bin`). In a non-interactive shell, run `. "$HOME/.cargo/env"` first.
-
 ```bash
-cargo build
-./target/debug/stickstudy make samples/photosynthesis.txt -f explainer   # writes lessons/photosynthesis-explainer/
-./target/debug/stickstudy play lessons/photosynthesis-explainer [--scene N] [--mute]
-./target/debug/stickstudy revoice lessons/X --voice openai
-./target/debug/stickstudy formats | voices | style [-f chat]
+cargo build --release
+./target/release/stickstudy make samples/photosynthesis.txt            # -> lessons/photosynthesis/video.mp4
+./target/release/stickstudy render lessons/X --style cosmic --vertical  # re-render, no new script/voices
+./target/release/stickstudy frames lessons/X                            # PNG of every shot -> lessons/X/frames
+./target/release/stickstudy revoice lessons/X --voice openai
+./target/release/stickstudy styles | voices | prompt
 ```
 
-`make` options: `-f/--format`, `-o/--out`, `--scenes N`, `--focus "..."`, `--model opus|sonnet`,
-`--style file.md` (replaces the shared teaching style), voice flags (`--voice`, `--teacher-voice`,
-`--student-voice`, `--speed`), `--no-play`.
+A lesson folder: `lesson.json`, `material.txt`, `quiz.json`, `audio/sXX_lYY.wav`, `video.mp4`, `video.srt`
+(+ `video-vertical.mp4`). Useful render flags: `--until 20` (quick preview), `--no-music`, `--no-sfx`,
+`--music file.mp3`, `--music-db -16`, `--fps`, `--workers`.
 
-A lesson folder contains `lesson.json`, `material.txt` (the extracted source text) and `audio/sXX_lYY.wav`.
+**Windows dev notes (this machine):** the C: drive is nearly full. Rust lives on F:
+(`CARGO_HOME=F:\Tools\rust\cargo`, `RUSTUP_HOME=F:\Tools\rust\rustup`); set `TEMP`/`TMP` to a folder on F:
+when building. ffmpeg must be on PATH or in `STICKSTUDY_FFMPEG`. `STICKSTUDY_CLAUDE` overrides the claude binary.
 
-## Script generation (script.rs)
+## How a video is made
 
-- Runs `claude -p --output-format json --tools "" --no-session-persistence --json-schema <schema> --system-prompt <...>`
-  with the prompt on **stdin**. It removes the `CLAUDECODE` env var so it also works inside a Claude Code session.
-- Reads `structured_output` from the JSON result if present; otherwise it extracts the outermost `{...}` from `result`.
-  Retries once. Then `Lesson::sanitize()` drops malformed quizzes, empty lines and empty scenes.
-- The prompt has three parts: the **format prompt** (`Format::prompt()`: cast, voice, how to use on-screen elements),
-  the **shared teaching style** (`script::DEFAULT_STYLE`: the TikTok-style, from-scratch, exam and mnemonic rules),
-  and **script rules** (line length ≤ 28 words, TTS-friendly text, quiz rules).
-- The schema is built per format. Narrated formats only allow `speaker: "narrator"`. Stickman requires
-  `pose`/`listener_pose`. Explainer and whiteboard require `visuals` + `layout`.
-- Material is truncated at 150k characters.
+1. **Script** (`script.rs`): one `claude -p --json-schema` call. The schema requires `shots` on every line.
+   `SHOT_GUIDE` documents each shot kind and its fields, the pacing rule (new picture every 2–4 s of speech),
+   on-screen text limits, and the icon list. Cast is `--cast duo` (teacher + student) or `solo` (narrator host).
+2. **Voices** (`tts.rs`): `auto` = `sapi` on Windows (one batched PowerShell/System.Speech call for all
+   lines), `say` on macOS, `espeak` on Linux. `speech_span` trims leading/trailing silence so pacing is tight.
+3. **Timeline** (`timeline.rs`): intro card → per scene (chapter card for scenes 2+) → lines back to back
+   (`GAP` 0.16 s) → outro "QUIZ TIME" card. Each line's shots start at their `cue` word (or split the line
+   evenly); shots shorter than `MIN_SHOT` are dropped. Word timings are **estimated** from text length +
+   punctuation pauses (no speech recognizer). Captions are 1–4 word chunks with the current word in gold.
+4. **Beats** (`shots::plan`): for each shot, the time each element appears. Items are synced to the narration
+   word that names them (`find_word`), so things pop in as they're said. The same beats drive the sound effects,
+   so audio and visuals can't drift.
+5. **Frames** (`Renderer::frame`): pure function of time (stateless), so chunks render in parallel threads,
+   each piping RGBA into its own ffmpeg; then concat + mixed WAV. Camera push-in per shot, shake on stamps,
+   transitions (whip left/up, zoom, pop-swap, circle wipe) between shots; Talk→Talk is a hard cut.
+6. **Audio** (`audio.rs`): voice clips RMS-normalized, sfx synthesized in code, music = generated lo-fi loop
+   (or `--music`), ducked under speech, soft limiter. No loudnorm (it pumped the music up between lines).
 
-## lesson.json model
+## Shot kinds (lesson.json)
 
-```
-Lesson { title, format, teacher_name, student_name, scenes[] }
-Scene  { heading, board[] (key bullets), visuals[] {label, shape}, layout, lines[], quiz? }
-Line   { speaker: teacher|student|narrator, text, pose, listener_pose, audio?, duration }
-Quiz   { question, choices[], answer_index (0-based), explanation }
-Pose   idle|explain|point|wave|think|excited|shrug|confused   (unknown -> Unknown, drawn as idle)
-Shape  circle|square|triangle|hexagon|star
-Layout flow|compare|cycle|hub   (hub: the first visual is the center)
-```
+`talk` (cast close-up + speech bubble), `title` (kinetic words), `icon` (hero prop), `list`, `flow`, `cycle`,
+`compare`, `hub`, `definition`, `number` (counts up + confetti), `formula` (tokens drop in, arrows drawn),
+`mnemonic` (letter tiles), `myth` (MYTH stamp → FACT), `timeline`, `question`, `recap` (ticked off).
+Fields: `kind, cue, title, text, emphasis, icon, label, value, items[{label, icon, note}]`. Non-full-stage
+shots get the presenter on the left; in duo lessons the student peeks in from the bottom-right when talking.
 
-All new fields must be `#[serde(default)]` so older lesson.json files still load.
+**To add a shot kind:** add it to `ShotKind` + `SHOT_NAMES` (lesson.rs), document it in `SHOT_GUIDE`,
+add a `plan` arm and a draw function in `shots.rs`, then snapshot it. **To add a prop:** add the name to
+`ICON_NAMES`, aliases in `canonical`, and a match arm in `draw_named` (200×200 box centered on 0,0).
+**To add a style:** a `Style` variant + `Theme` + background in `styles.rs`.
 
-## Formats
-
-| Format | Speakers | Visuals |
-|---|---|---|
-| `stickman` | teacher + student | two rigged stick figures, chalkboard with progressively revealed bullets |
-| `explainer` | narrator (mascot "Blip" reacts, never speaks) | starfield gradient, a planet whose color changes per scene, glowing shapes popping in along arrows, a key-point pill caption |
-| `whiteboard` | narrator | marker notes typed out at marker speed on the left, sketchy doodles drawn stroke by stroke with arrows on the right |
-| `chat` | teacher + student as two friends texting | phone UI, bubbles that pop in, typing dots during gaps, sticky note of key points |
-
-**To add a format:**
-1. Add a variant to `formats::Format`, plus `ALL`, `name`, `tagline`, `prompt`, and the capability flags.
-2. Adjust `script::schema` if it needs new fields (and add them to `lesson.rs` with serde defaults).
-3. Add a renderer in `looks.rs` and a match arm in `player_main`. Set `dark` for the header colors if the background is dark.
-4. Generate a sample and visually verify it (see below).
-
-## Voices (tts.rs)
-
-Backends: `say` (macOS, default; teacher Daniel, student Samantha, rate 200), `piper` (needs a .onnx model),
-`openai` (gpt-4o-mini-tts, `OPENAI_API_KEY`, per-character acting `instructions`, raw PCM 24 kHz → WAV),
-`elevenlabs` (`ELEVENLABS_API_KEY`, pcm_22050 → WAV), `espeak` (`espeak-ng`), `none` (estimated durations).
-The narrator uses the teacher voice. Every backend must produce a WAV whose duration `hound` can read, because
-the player times everything off `Line.duration`.
-
-## Player internals (player.rs)
-
-- Everything is drawn in a fixed **1280×720 world**, letterboxed into the window.
-- **Gotchas that already bit us:**
-  - macroquad 0.4's `Camera2D::from_display_rect` is **y-up**. We negate `cam.zoom.y`, or everything renders upside down.
-  - `screen_width()` is in logical points, but the GL **viewport needs physical pixels**. Multiply by `screen_dpi_scale()`,
-    or the scene only fills a quarter of the window on Retina displays.
-  - The mouse is mapped manually through the same letterbox transform (`pt` = points per world unit).
-  - Text goes through `Ink`, which rasterizes at the real pixel scale (`px = pt * dpi`) so it stays sharp.
-- Fonts are macOS system fonts loaded at runtime (Arial Rounded Bold for the UI, Chalkduster for chalk, Comic Sans
-  MS Bold for handwriting), with a fallback to macroquad's default font if they're missing.
-- Timing: each line lasts `duration.max(0.8) + GAP (0.22s)`. Board bullets, visuals and subtitles are revealed from
-  `scene_progress()` / `scene_clock()`. Audio uses one rodio `Sink` per line. Pausing pauses both the sink and the clock.
-- Phases: `Playing` → (`Quiz` if the scene has one and it hasn't been answered) → the next scene … → `Done`.
-- Controls: Space pause, ←/→ scenes, R replay, 1–4 or click to answer, Enter to continue, click the progress bar
-  to jump (green = right, red = wrong), Q/Esc quit.
+All new lesson fields must be `#[serde(default)]` so older lesson.json files still load.
 
 ## Visual testing (important)
 
-The terminal lacks macOS Screen Recording permission, so `screencapture` only captures the wallpaper. Use the
-built-in snapshot hook instead. It renders a frame to a PNG and exits:
+Render stills instead of watching the whole video:
 
 ```bash
-STICKSTUDY_SNAPSHOT=/tmp/out.png STICKSTUDY_SNAPSHOT_AT=8 \
-  ./target/debug/stickstudy play lessons/photosynthesis-whiteboard --mute --scene 3
-# optional: STICKSTUDY_SNAPSHOT_PHASE=quiz | answered | done
-sips -Z 1600 /tmp/out.png --out /tmp/out_s.png   # downscale before viewing
+./target/release/stickstudy frames lessons/test            # middle of every shot
+./target/release/stickstudy frames lessons/test --at 3 12.5 -1 --style chalk --vertical
 ```
 
-The PNG matches the on-screen orientation. **Don't flip it.** If a snapshot is upside down, the app is upside down.
-After any rendering change, snapshot every format plus the quiz and done phases, and look at them.
+`lessons/test/lesson.json` is a hand-written lesson that uses **every** shot kind; revoice it with
+`stickstudy revoice lessons/test` (free, no Claude call). For motion, extract frames from the MP4 with
+`ffmpeg -ss <t> -t 0.5 -i video.mp4 -vf fps=16 out_%02d.png`. After any rendering change, look at every shot.
 
-## Environment notes
+## Notes
 
-- macOS 14 on Apple Silicon. Homebrew here is "Tier 3" and builds big formulas (rust, llvm) from source, which
-  takes hours. Don't use brew for toolchains.
-- `pdftotext`, `piper` and `espeak-ng` are not installed by default; the code gives install hints when they're missing.
-- `claude -p` calls cost the user's Claude usage. Generate test lessons sparingly (one sample per format is enough).
+- `claude -p` calls cost the user's Claude usage. Generate test lessons sparingly.
+- Performance: ~3× realtime at 1080p30 on a 12-thread CPU (release build).
 
 ## Git workflow
 
 - Remote: `https://github.com/Joey239716/Lazylearn.git`, branch `main`.
 - Commit and push **directly to `main`** whenever a piece of work is done and verified. No PRs or branches needed.
 - **No `Co-Authored-By` / Claude attribution lines** in commit messages.
-- `target/` and `lessons/` are gitignored.
+- `target/` and `lessons/` are gitignored (except `lessons/test/lesson.json`).
 
-## Ideas / next steps
+## Roadmap
 
-- Export a lesson to MP4 (render frames with the snapshot path + ffmpeg).
-- More formats (game-show quiz host, comic-strip panels, podcast duo).
-- Spaced-repetition review mode built from the quiz results.
-- A drag-and-drop GUI launcher instead of the CLI.
-- OCR fallback for scanned PDFs.
+1. ✅ Renderer, MP4 export, shot system, props, doodle style
+2. ✅ Sound effects, music + ducking, captions
+3. More styles polished (cosmic / whiteboard / chalk exist but need a visual pass), vertical 9:16 layouts
+4. `stickstudy watch`: play the MP4, then a clickable quiz window from `quiz.json`

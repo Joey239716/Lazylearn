@@ -1,31 +1,69 @@
+mod audio;
+mod character;
 mod extract;
-mod formats;
-mod looks;
+mod gfx;
+mod icons;
 mod lesson;
-mod player;
+mod render;
 mod script;
-mod stickman;
+mod shots;
+mod styles;
+mod timeline;
 mod tts;
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use lesson::Lesson;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
     name = "stickstudy",
     version,
-    about = "Turn class material (PDF, PowerPoint, transcripts) into fun, voiced animated lessons with quizzes"
+    about = "Turn class material (PDF, PowerPoint, transcripts) into fun, animated, voiced study videos (MP4)"
 )]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
 }
 
+#[derive(Args, Debug, Clone)]
+struct VideoArgs {
+    /// Visual style: doodle, cosmic, whiteboard or chalk (`stickstudy styles` to compare)
+    #[arg(short, long, value_enum)]
+    style: Option<styles::Style>,
+    /// Also render a 9:16 vertical version (Shorts / TikTok / Reels)
+    #[arg(long)]
+    vertical: bool,
+    /// Only render the vertical version
+    #[arg(long, conflicts_with = "vertical")]
+    vertical_only: bool,
+    /// Background music file (mp3, wav, …). Default: a generated lo-fi loop
+    #[arg(long)]
+    music: Option<PathBuf>,
+    /// Music level under the voice in dB (more negative = quieter)
+    #[arg(long, default_value_t = -16.0, allow_negative_numbers = true)]
+    music_db: f32,
+    /// No background music
+    #[arg(long)]
+    no_music: bool,
+    /// No sound effects
+    #[arg(long)]
+    no_sfx: bool,
+    /// Frames per second
+    #[arg(long, default_value_t = 30)]
+    fps: u32,
+    /// Only render the first N seconds (quick preview)
+    #[arg(long)]
+    until: Option<f32>,
+    /// Render threads (default: half your CPU threads)
+    #[arg(long)]
+    workers: Option<usize>,
+}
+
 #[derive(Subcommand)]
 enum Cmd {
-    /// Create a lesson from class material, then play it
+    /// Create a study video from class material
     Make {
         /// PDF, .pptx, .vtt/.srt transcript, .txt or .md files (several are combined into one lesson)
         #[arg(required = true)]
@@ -33,9 +71,9 @@ enum Cmd {
         /// Output lesson folder (default: lessons/<first file name>)
         #[arg(short, long)]
         out: Option<PathBuf>,
-        /// Video format: stickman, explainer, whiteboard or chat (`stickstudy formats` to compare)
-        #[arg(short, long, value_enum, default_value_t = formats::Format::Stickman)]
-        format: formats::Format,
+        /// duo = teacher + student banter, solo = one narrator
+        #[arg(long, value_enum, default_value_t = script::CastMode::Duo)]
+        cast: script::CastMode,
         /// Force a number of scenes (default: scales with the material)
         #[arg(long)]
         scenes: Option<u32>,
@@ -46,41 +84,48 @@ enum Cmd {
         #[arg(long)]
         model: Option<String>,
         /// Replace the teaching-style instructions with the contents of this file
-        /// (see `stickstudy style` for the default)
+        /// (see `stickstudy prompt` for the default)
         #[arg(long)]
-        style: Option<PathBuf>,
+        teaching: Option<PathBuf>,
         #[command(flatten)]
         voice: tts::VoiceArgs,
-        /// Don't open the player when done
-        #[arg(long)]
-        no_play: bool,
+        #[command(flatten)]
+        video: VideoArgs,
     },
-    /// Watch a lesson you already made
-    Play {
+    /// Re-render the video of an existing lesson (e.g. in a different style)
+    Render {
         dir: PathBuf,
-        /// Start from this scene number
-        #[arg(long, default_value_t = 1)]
-        scene: usize,
-        /// Play without sound
-        #[arg(long)]
-        mute: bool,
+        #[command(flatten)]
+        video: VideoArgs,
     },
-    /// Re-generate the voices of an existing lesson (try different engines!)
+    /// Re-generate the voices of an existing lesson, then re-render it
     Revoice {
         dir: PathBuf,
         #[command(flatten)]
         voice: tts::VoiceArgs,
+        #[command(flatten)]
+        video: VideoArgs,
     },
-    /// List voice engines and the voices available on this Mac
-    Voices,
-    /// List the video formats
-    Formats,
-    /// Print the script instructions Claude follows (copy, edit, pass with --style)
-    Style {
-        /// Also show this format's own instructions
+    /// Save still frames of a lesson as PNGs (no video), e.g. to check a style
+    Frames {
+        dir: PathBuf,
+        /// Times in seconds (negative = from the end). Default: the middle of every shot
+        #[arg(long, num_args = 1.., allow_negative_numbers = true)]
+        at: Vec<f32>,
         #[arg(short, long, value_enum)]
-        format: Option<formats::Format>,
+        style: Option<styles::Style>,
+        #[arg(long)]
+        vertical: bool,
+        /// Where to put the PNGs (default: <lesson>/frames)
+        #[arg(short, long)]
+        out: Option<PathBuf>,
     },
+    /// List voice engines and the voices installed on this computer
+    Voices,
+    /// List the visual styles
+    Styles,
+    /// Print the script instructions Claude follows (copy, edit, pass with --teaching)
+    Prompt,
 }
 
 fn main() {
@@ -92,20 +137,21 @@ fn main() {
 
 fn run() -> Result<()> {
     match Cli::parse().cmd {
-        Cmd::Make { inputs, out, format, scenes, focus, model, style, voice, no_play } => {
+        Cmd::Make { inputs, out, cast, scenes, focus, model, teaching, voice, video } => {
             for p in &inputs {
                 if !p.exists() {
                     bail!("file not found: {}", p.display());
                 }
             }
-            let voice_engine = tts::Voice::new(&voice)?; // validate voice setup before the slow part
-            let style = match style {
+            render::ffmpeg()?; // fail fast, before the slow parts
+            let voice_engine = tts::Voice::new(&voice)?;
+            let teaching = match teaching {
                 Some(p) => Some(std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?),
                 None => None,
             };
             let dir = out.unwrap_or_else(|| {
                 let stem = inputs[0].file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or("lesson".into());
-                PathBuf::from("lessons").join(format!("{stem}-{}", format.name()))
+                PathBuf::from("lessons").join(stem)
             });
 
             eprintln!("📚 Reading your material…");
@@ -114,53 +160,103 @@ fn run() -> Result<()> {
             std::fs::write(dir.join("material.txt"), &material)?;
             eprintln!("  {} characters of text extracted", material.len());
 
-            eprintln!("🎬 Format: {} — {}", format.name(), format.tagline());
-            eprintln!("✍️  Claude is writing your lesson script (usually 1–3 minutes)…");
-            let opts = script::ScriptOptions { scenes, focus, model, style, format };
+            eprintln!("✍️  Claude is writing the script and shot list (usually 1–4 minutes)…");
+            let opts = script::ScriptOptions { scenes, focus, model, teaching, cast };
             let mut lesson = script::write_lesson(&material, &opts)?;
+            lesson.style = video.style.unwrap_or_default();
             lesson.save(&dir)?;
-            let quizzes = lesson.scenes.iter().filter(|s| s.quiz.is_some()).count();
-            eprintln!("  \"{}\" — {} scenes, {} quizzes", lesson.title, lesson.scenes.len(), quizzes);
+            let shots: usize = lesson.scenes.iter().flat_map(|s| &s.lines).map(|l| l.shots.len()).sum();
+            eprintln!(
+                "  \"{}\" — {} scenes, {} lines, {} shots, {} quiz questions",
+                lesson.title,
+                lesson.scenes.len(),
+                lesson.line_count(),
+                shots,
+                lesson.quizzes().len()
+            );
 
             eprintln!("🗣  Recording voices: {}", voice_engine.describe());
             tts::voice_lesson(&mut lesson, &dir, &voice_engine)?;
             lesson.save(&dir)?;
-
-            eprintln!("✅ Lesson saved to {}", dir.display());
-            eprintln!("   watch again any time:  stickstudy play {}", dir.display());
-            if !no_play {
-                player::run(lesson, dir, 0, false);
-            }
+            write_quiz(&lesson, &dir)?;
+            render_videos(&mut lesson, &dir, &video)?;
         }
-        Cmd::Play { dir, scene, mute } => {
-            let lesson = Lesson::load(&dir)?;
-            player::run(lesson, dir, scene.saturating_sub(1), mute);
+        Cmd::Render { dir, video } => {
+            let mut lesson = Lesson::load(&dir)?;
+            render_videos(&mut lesson, &dir, &video)?;
         }
-        Cmd::Revoice { dir, voice } => {
+        Cmd::Revoice { dir, voice, video } => {
             let mut lesson = Lesson::load(&dir)?;
             let v = tts::Voice::new(&voice)?;
             eprintln!("🗣  Recording voices: {}", v.describe());
             tts::voice_lesson(&mut lesson, &dir, &v)?;
             lesson.save(&dir)?;
-            eprintln!("✅ Done. Play it:  stickstudy play {}", dir.display());
+            render_videos(&mut lesson, &dir, &video)?;
+        }
+        Cmd::Frames { dir, at, style, vertical, out } => {
+            let mut lesson = Lesson::load(&dir)?;
+            if let Some(s) = style {
+                lesson.style = s;
+            }
+            let (w, h) = if vertical { (1080, 1920) } else { (1920, 1080) };
+            let times: Vec<f32> = if at.is_empty() {
+                render::shot_times(&lesson, &dir, w, h).iter().map(|(a, b, _)| a + (b - a).min(4.0) * 0.75).collect()
+            } else {
+                at
+            };
+            let out = out.unwrap_or_else(|| dir.join("frames"));
+            let files = render::snapshots(&lesson, &dir, w, h, &times, &out)?;
+            eprintln!("✅ {} frames saved to {}", files.len(), out.display());
         }
         Cmd::Voices => tts::print_voice_guide(),
-        Cmd::Formats => {
-            println!("Video formats (pick with --format <name>):\n");
-            for f in formats::ALL {
-                println!("  {:<11} {}", f.name(), f.tagline());
+        Cmd::Styles => {
+            println!("Visual styles (pick with --style <name>; re-render any lesson in another style with `stickstudy render <lesson> --style <name>`):\n");
+            for s in styles::ALL {
+                println!("  {:<11} {}", s.name(), s.tagline());
             }
-            println!("\nExample:  stickstudy make lecture.pdf --format explainer");
-            println!("See a format's script instructions:  stickstudy style --format chat");
         }
-        Cmd::Style { format } => {
-            println!("# Teaching style (shared by all formats; replace with --style <file>)\n");
+        Cmd::Prompt => {
+            println!("# Teaching style (replace with --teaching <file>)\n");
             println!("{}", script::DEFAULT_STYLE);
-            if let Some(f) = format {
-                println!("\n# {} format instructions (built in)\n", f.name());
-                println!("{}", f.prompt());
-            }
         }
     }
+    Ok(())
+}
+
+fn render_videos(lesson: &mut Lesson, dir: &Path, v: &VideoArgs) -> Result<()> {
+    if let Some(s) = v.style {
+        lesson.style = s;
+    }
+    let mut sizes = vec![];
+    if !v.vertical_only {
+        sizes.push((1920u32, 1080u32, "video.mp4"));
+    }
+    if v.vertical || v.vertical_only {
+        sizes.push((1080, 1920, "video-vertical.mp4"));
+    }
+    for (w, h, name) in sizes {
+        eprintln!("🎬 Rendering {name} ({w}×{h}, {} style)…", lesson.style.name());
+        let opts = render::RenderOptions {
+            width: w,
+            height: h,
+            fps: v.fps,
+            until: v.until,
+            music: v.music.clone(),
+            no_music: v.no_music,
+            no_sfx: v.no_sfx,
+            music_db: v.music_db,
+            workers: v.workers,
+            out: dir.join(name),
+        };
+        let out = render::render(lesson, dir, &opts)?;
+        eprintln!("✅ {}", out.display());
+    }
+    Ok(())
+}
+
+/// The quiz the video ends with, for the quiz window.
+fn write_quiz(lesson: &Lesson, dir: &Path) -> Result<()> {
+    let qs = lesson.quizzes();
+    std::fs::write(dir.join("quiz.json"), serde_json::to_string_pretty(&serde_json::json!({ "title": lesson.title, "questions": qs }))?)?;
     Ok(())
 }

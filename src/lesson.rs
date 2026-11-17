@@ -1,3 +1,5 @@
+//! The lesson script: what Claude writes, what TTS fills in, what the renderer draws.
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -22,13 +24,95 @@ pub enum Pose {
     Excited,
     Shrug,
     Confused,
+    Cheer,
+    Shocked,
+    Facepalm,
+    Sad,
     #[serde(other)]
     Unknown,
 }
 
 pub const POSE_NAMES: &[&str] = &[
-    "idle", "explain", "point", "wave", "think", "excited", "shrug", "confused",
+    "idle", "explain", "point", "wave", "think", "excited", "shrug", "confused", "cheer", "shocked",
+    "facepalm", "sad",
 ];
+
+/// What kind of picture a shot is. Each kind has its own layout and choreography.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ShotKind {
+    /// The cast up close; `text` becomes a speech bubble, `icon` floats beside them.
+    #[default]
+    Talk,
+    /// Kinetic typography: `text` slams in word by word, `emphasis` word is highlighted.
+    Title,
+    /// One big hero icon with a `label` (and optional `text` underneath).
+    Icon,
+    /// `title` + 2-4 `items` popping in one after another.
+    List,
+    /// 2-4 `items` connected left to right by arrows (a process, cause and effect).
+    Flow,
+    /// 3-5 `items` in a loop.
+    Cycle,
+    /// Exactly 2 `items`, A versus B, each with a short `note`.
+    Compare,
+    /// `title` (+ `icon`) in the middle, 2-5 `items` around it.
+    Hub,
+    /// `title` = the term, `text` = the precise definition, optional `icon`.
+    Definition,
+    /// `value` (e.g. "70%", "3.8 billion") counts up, `text` explains it.
+    Number,
+    /// `text` = a formula or equation (symbols allowed, it is only shown, never read aloud).
+    Formula,
+    /// `title` = acronym, `items` = one word per letter.
+    Mnemonic,
+    /// `title` = the misconception, `text` = the truth. MYTH stamp, then FACT.
+    Myth,
+    /// 2-5 `items` along a line; `note` is the date or step number.
+    Timeline,
+    /// `text` = a question, big question mark, cast thinking.
+    Question,
+    /// `title` + 2-5 `items` that get ticked off (recaps, checklists).
+    Recap,
+    #[serde(other)]
+    Unknown,
+}
+
+pub const SHOT_NAMES: &[&str] = &[
+    "talk", "title", "icon", "list", "flow", "cycle", "compare", "hub", "definition", "number", "formula",
+    "mnemonic", "myth", "timeline", "question", "recap",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Item {
+    pub label: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Shot {
+    pub kind: ShotKind,
+    /// The word in the line where this shot should appear (default: shots split the line evenly).
+    #[serde(default)]
+    pub cue: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub emphasis: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub value: String,
+    #[serde(default)]
+    pub items: Vec<Item>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Line {
@@ -38,12 +122,17 @@ pub struct Line {
     pub pose: Pose,
     #[serde(default)]
     pub listener_pose: Pose,
+    #[serde(default)]
+    pub shots: Vec<Shot>,
     /// Audio file path relative to the lesson folder (filled in by the voice step).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<String>,
-    /// Seconds of speech (filled in by the voice step).
+    /// Seconds of speech after trimming silence (filled in by the voice step).
     #[serde(default)]
     pub duration: f32,
+    /// Where the speech starts inside the audio file (leading silence that gets skipped).
+    #[serde(default)]
+    pub audio_start: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,55 +144,9 @@ pub struct Quiz {
     pub explanation: String,
 }
 
-/// A concept object drawn in the explainer / whiteboard formats.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Visual {
-    pub label: String,
-    #[serde(default)]
-    pub shape: Shape,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Shape {
-    #[default]
-    Circle,
-    Square,
-    Triangle,
-    Hexagon,
-    Star,
-    #[serde(other)]
-    Other,
-}
-pub const SHAPE_NAMES: &[&str] = &["circle", "square", "triangle", "hexagon", "star"];
-
-/// How a scene's visuals relate to each other.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Layout {
-    /// A -> B -> C (process, cause and effect)
-    #[default]
-    Flow,
-    /// A vs B (differences)
-    Compare,
-    /// A -> B -> C -> back to A
-    Cycle,
-    /// parts around a central idea (first visual is the center)
-    Hub,
-    #[serde(other)]
-    Other,
-}
-pub const LAYOUT_NAMES: &[&str] = &["flow", "compare", "cycle", "hub"];
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scene {
     pub heading: String,
-    #[serde(default)]
-    pub board: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub visuals: Vec<Visual>,
-    #[serde(default)]
-    pub layout: Layout,
     pub lines: Vec<Line>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quiz: Option<Quiz>,
@@ -120,7 +163,7 @@ fn default_student() -> String {
 pub struct Lesson {
     pub title: String,
     #[serde(default)]
-    pub format: crate::formats::Format,
+    pub style: crate::styles::Style,
     #[serde(default = "default_teacher")]
     pub teacher_name: String,
     #[serde(default = "default_student")]
@@ -142,13 +185,33 @@ impl Lesson {
         Ok(())
     }
 
-    /// Drop anything malformed so the player never has to deal with it.
+    /// Drop anything malformed so the renderer never has to deal with it.
     pub fn sanitize(&mut self) {
         for scene in &mut self.scenes {
             scene.lines.retain(|l| !l.text.trim().is_empty());
-            scene.board.retain(|b| !b.trim().is_empty());
-            scene.visuals.retain(|v| !v.label.trim().is_empty());
-            scene.visuals.truncate(5);
+            for line in &mut scene.lines {
+                line.shots.retain(|s| s.kind != ShotKind::Unknown);
+                line.shots.truncate(4);
+                for s in &mut line.shots {
+                    s.items.retain(|i| !i.label.trim().is_empty());
+                    s.items.truncate(5);
+                    // Shots that need items but got none become a title card.
+                    let needs_items = matches!(
+                        s.kind,
+                        ShotKind::List | ShotKind::Flow | ShotKind::Cycle | ShotKind::Compare | ShotKind::Hub
+                            | ShotKind::Mnemonic | ShotKind::Timeline | ShotKind::Recap
+                    );
+                    if needs_items && s.items.len() < 2 {
+                        s.kind = if s.icon.is_empty() { ShotKind::Title } else { ShotKind::Icon };
+                        if s.text.is_empty() {
+                            s.text = if s.title.is_empty() { s.label.clone() } else { s.title.clone() };
+                        }
+                    }
+                    if s.kind == ShotKind::Compare {
+                        s.items.truncate(2);
+                    }
+                }
+            }
             if let Some(q) = &scene.quiz {
                 if q.choices.len() < 2 || q.answer_index >= q.choices.len() {
                     scene.quiz = None;
@@ -160,5 +223,9 @@ impl Lesson {
 
     pub fn line_count(&self) -> usize {
         self.scenes.iter().map(|s| s.lines.len()).sum()
+    }
+
+    pub fn quizzes(&self) -> Vec<&Quiz> {
+        self.scenes.iter().filter_map(|s| s.quiz.as_ref()).collect()
     }
 }

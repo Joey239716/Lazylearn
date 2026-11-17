@@ -10,6 +10,10 @@ use std::process::{Command, Stdio};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Backend {
+    /// Best free offline voice for this computer (Windows: sapi, macOS: say, Linux: espeak)
+    Auto,
+    /// Windows built-in voices (free, offline)
+    Sapi,
     /// macOS built-in voices (free, offline)
     Say,
     /// Piper neural TTS (free, offline, natural) — needs `piper` + a .onnx voice model
@@ -27,7 +31,7 @@ pub enum Backend {
 #[derive(Args, Debug, Clone)]
 pub struct VoiceArgs {
     /// Voice engine to use
-    #[arg(long = "voice", value_enum, default_value_t = Backend::Say)]
+    #[arg(long = "voice", value_enum, default_value_t = Backend::Auto)]
     pub backend: Backend,
     /// Teacher's / narrator's voice (voice name, voice ID, or .onnx model path for piper)
     #[arg(long)]
@@ -35,7 +39,7 @@ pub struct VoiceArgs {
     /// Student's voice (voice name, voice ID, or .onnx model path for piper)
     #[arg(long)]
     pub student_voice: Option<String>,
-    /// Speaking speed (words per minute for say/espeak; 0.25–4.0 multiplier for openai)
+    /// Speaking speed (words per minute for say/espeak; -10..10 for sapi; 0.25–4.0 multiplier for openai)
     #[arg(long)]
     pub speed: Option<f32>,
 }
@@ -50,12 +54,20 @@ pub struct Voice {
 
 impl Voice {
     pub fn new(a: &VoiceArgs) -> Result<Voice> {
+        let backend = match a.backend {
+            Backend::Auto if cfg!(windows) => Backend::Sapi,
+            Backend::Auto if cfg!(target_os = "macos") => Backend::Say,
+            Backend::Auto => Backend::Espeak,
+            b => b,
+        };
+        let a = &VoiceArgs { backend, ..a.clone() };
         let (dt, ds) = match a.backend {
+            Backend::Sapi => ("Microsoft David Desktop", "Microsoft Zira Desktop"),
             Backend::Say => ("Daniel", "Samantha"),
             Backend::Openai => ("fable", "nova"),
             Backend::Elevenlabs => ("pNInz6obpgDQGcFmaJgB", "21m00Tcm4TlvDq8ikWAM"), // Adam, Rachel
             Backend::Espeak => ("en-gb+m3", "en-us+f3"),
-            Backend::Piper | Backend::None => ("", ""),
+            Backend::Piper | Backend::None | Backend::Auto => ("", ""),
         };
         let teacher = a.teacher_voice.clone().unwrap_or_else(|| dt.to_string());
         let student = a
@@ -98,6 +110,8 @@ impl Voice {
             Speaker::Student => &self.student,
         };
         match self.backend {
+            Backend::Sapi => sapi_batch(&[(text.to_string(), voice.clone(), out.to_path_buf())], self.speed),
+            Backend::Auto => unreachable!(),
             Backend::Say => {
                 let mut c = Command::new("say");
                 c.args(["-v", voice, "--data-format=LEI16@22050", "-o"]).arg(out);
@@ -173,7 +187,7 @@ impl Voice {
     }
 }
 
-/// Generate audio for every line, filling in `audio` and `duration`.
+/// Generate audio for every line, filling in `audio`, `audio_start` and `duration`.
 pub fn voice_lesson(lesson: &mut Lesson, dir: &Path, voice: &Voice) -> Result<()> {
     let audio_dir = dir.join("audio");
     if audio_dir.exists() {
@@ -181,38 +195,131 @@ pub fn voice_lesson(lesson: &mut Lesson, dir: &Path, voice: &Voice) -> Result<()
     }
     std::fs::create_dir_all(&audio_dir)?;
     let total = lesson.line_count();
+    if voice.backend == Backend::Sapi {
+        // one PowerShell process for the whole lesson (starting one per line is slow)
+        let mut jobs = vec![];
+        for (si, scene) in lesson.scenes.iter().enumerate() {
+            for (li, line) in scene.lines.iter().enumerate() {
+                let v = match line.speaker {
+                    Speaker::Student => voice.student.clone(),
+                    _ => voice.teacher.clone(),
+                };
+                jobs.push((line.text.clone(), v, dir.join(format!("audio/s{si:02}_l{li:02}.wav"))));
+            }
+        }
+        eprintln!("  🎙  voicing {total} lines with Windows speech…");
+        sapi_batch(&jobs, voice.speed)?;
+    }
     let mut done = 0;
     for (si, scene) in lesson.scenes.iter_mut().enumerate() {
         for (li, line) in scene.lines.iter_mut().enumerate() {
             done += 1;
-            eprint!("\r  🎙  voicing line {done}/{total}   ");
-            let _ = std::io::stderr().flush();
+            if voice.backend != Backend::Sapi {
+                eprint!("\r  🎙  voicing line {done}/{total}   ");
+                let _ = std::io::stderr().flush();
+            }
             if voice.backend == Backend::None {
                 line.audio = None;
+                line.audio_start = 0.0;
                 line.duration = estimate_seconds(&line.text);
                 continue;
             }
             let rel = format!("audio/s{si:02}_l{li:02}.wav");
             let path = dir.join(&rel);
-            voice
-                .synth(&line.text, line.speaker, &path)
-                .with_context(|| format!("voicing scene {} line {}", si + 1, li + 1))?;
-            line.duration = wav_seconds(&path)
+            if voice.backend != Backend::Sapi {
+                voice
+                    .synth(&line.text, line.speaker, &path)
+                    .with_context(|| format!("voicing scene {} line {}", si + 1, li + 1))?;
+            }
+            let (start, dur) = speech_span(&path)
                 .with_context(|| format!("reading generated audio {}", path.display()))?;
+            line.audio_start = start;
+            line.duration = dur;
             line.audio = Some(rel);
         }
     }
-    eprintln!();
+    if voice.backend != Backend::Sapi {
+        eprintln!();
+    }
+    Ok(())
+}
+
+/// Where speech starts and how long it lasts, ignoring silence at both ends.
+pub fn speech_span(p: &Path) -> Result<(f32, f32)> {
+    let mut r = hound::WavReader::open(p)?;
+    let spec = r.spec();
+    let ch = spec.channels.max(1) as usize;
+    let sr = spec.sample_rate as f32;
+    let s: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Int => {
+            let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
+            r.samples::<i32>().filter_map(|x| x.ok()).map(|x| x as f32 / max).collect()
+        }
+        hound::SampleFormat::Float => r.samples::<f32>().filter_map(|x| x.ok()).collect(),
+    };
+    let mono: Vec<f32> = s.chunks(ch).map(|c| c.iter().map(|v| v.abs()).fold(0.0, f32::max)).collect();
+    let total = mono.len() as f32 / sr;
+    let peak = mono.iter().fold(0.0f32, |a, v| a.max(*v));
+    if peak <= 0.0 || mono.is_empty() {
+        return Ok((0.0, total.max(0.3)));
+    }
+    let thr = peak * 0.04;
+    let first = mono.iter().position(|v| *v > thr).unwrap_or(0) as f32 / sr;
+    let last = mono.iter().rposition(|v| *v > thr).unwrap_or(mono.len() - 1) as f32 / sr;
+    let start = (first - 0.04).max(0.0);
+    let end = (last + 0.08).min(total);
+    Ok((start, (end - start).max(0.3)))
+}
+
+/// Windows SAPI via PowerShell's System.Speech. `jobs` = (text, voice name, output wav).
+fn sapi_batch(jobs: &[(String, String, std::path::PathBuf)], speed: Option<f32>) -> Result<()> {
+    let tmp = std::env::temp_dir().join(format!("stickstudy_sapi_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp)?;
+    let list: Vec<serde_json::Value> = jobs
+        .iter()
+        .map(|(t, v, o)| serde_json::json!({ "text": t, "voice": v, "out": o.to_string_lossy() }))
+        .collect();
+    let jobs_path = tmp.join("jobs.json");
+    std::fs::write(&jobs_path, serde_json::to_string(&list)?)?;
+    let rate = speed.map(|s| s.clamp(-10.0, 10.0) as i32).unwrap_or(2);
+    let script = format!(
+        r#"$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Speech
+$jobs = Get-Content -Raw -Encoding UTF8 '{jobs}' | ConvertFrom-Json
+$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$s.Rate = {rate}
+$fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(22050, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
+$names = $s.GetInstalledVoices() | ForEach-Object {{ $_.VoiceInfo.Name }}
+foreach ($j in $jobs) {{
+  if ($names -contains $j.voice) {{ $s.SelectVoice($j.voice) }}
+  $s.SetOutputToWaveFile($j.out, $fmt)
+  $s.Speak($j.text)
+  $s.SetOutputToNull()
+}}
+$s.Dispose()
+"#,
+        jobs = jobs_path.display(),
+        rate = rate
+    );
+    let ps1 = tmp.join("voice.ps1");
+    // UTF-8 with BOM so Windows PowerShell 5 reads non-ASCII text correctly
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend_from_slice(script.as_bytes());
+    std::fs::write(&ps1, bytes)?;
+    let out = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&ps1)
+        .output()
+        .context("couldn't run PowerShell for Windows speech")?;
+    let _ = std::fs::remove_dir_all(&tmp);
+    if !out.status.success() {
+        bail!("Windows speech failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
     Ok(())
 }
 
 pub fn estimate_seconds(text: &str) -> f32 {
     (text.split_whitespace().count() as f32 / 2.6).max(1.5)
-}
-
-fn wav_seconds(p: &Path) -> Result<f32> {
-    let r = hound::WavReader::open(p)?;
-    Ok(r.duration() as f32 / r.spec().sample_rate as f32)
 }
 
 fn write_pcm16(out: &Path, bytes: &[u8], rate: u32) -> Result<()> {
@@ -242,13 +349,18 @@ fn run_with_stdin(mut c: Command, text: &str, what: &str) -> Result<()> {
 }
 
 fn which(bin: &str) -> bool {
-    Command::new("which").arg(bin).output().map(|o| o.status.success()).unwrap_or(false)
+    let finder = if cfg!(windows) { "where" } else { "which" };
+    Command::new(finder).arg(bin).output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 /// `stickstudy voices` — show every engine and how to use it.
 pub fn print_voice_guide() {
     println!("Voice engines (pick with --voice <engine>):\n");
-    println!("  say         macOS built-in. Free, offline, zero setup.  [default]");
+    println!("  auto        [default] sapi on Windows, say on macOS, espeak on Linux");
+    println!("  sapi        Windows built-in. Free, offline, zero setup.");
+    println!("              default voices: teacher=Microsoft David Desktop, student=Microsoft Zira Desktop");
+    println!("              tip: --speed -10..10 (default 2, a little brisk)");
+    println!("  say         macOS built-in. Free, offline, zero setup.");
     println!("              default voices: teacher=Daniel, student=Samantha");
     println!("              tip: download nicer 'Premium'/'Enhanced' voices in System Settings →");
     println!("              Accessibility → Spoken Content → System Voice → Manage Voices");
@@ -262,6 +374,15 @@ pub fn print_voice_guide() {
     println!("  espeak      Retro robot voice, free. `brew install espeak-ng`  voices: en-us+m3, en-gb+f2, …");
     println!("  none        Silent, subtitles only.\n");
 
+    if cfg!(windows) {
+        let ps = "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name }";
+        if let Ok(out) = Command::new("powershell").args(["-NoProfile", "-Command", ps]).output() {
+            println!("Windows voices installed here (use with --voice sapi --teacher-voice \"<name>\"):");
+            for l in String::from_utf8_lossy(&out.stdout).lines().filter(|l| !l.trim().is_empty()) {
+                println!("  {}", l.trim());
+            }
+        }
+    }
     if let Ok(out) = Command::new("say").args(["-v", "?"]).output() {
         let list = String::from_utf8_lossy(&out.stdout);
         let novelty = [

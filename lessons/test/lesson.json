@@ -1,0 +1,491 @@
+{
+  "title": "Photosynthesis in 3 Minutes",
+  "style": "doodle",
+  "teacher_name": "Prof. Stix",
+  "student_name": "Pip",
+  "scenes": [
+    {
+      "heading": "Plants Eat Sunlight",
+      "lines": [
+        {
+          "speaker": "teacher",
+          "text": "What if I told you every breath you take was made by a leaf?",
+          "pose": "wave",
+          "listener_pose": "shocked",
+          "shots": [
+            {
+              "kind": "title",
+              "cue": "",
+              "title": "",
+              "text": "Every breath was made by a leaf",
+              "emphasis": "leaf",
+              "icon": "leaf",
+              "label": "",
+              "value": "",
+              "items": []
+            }
+          ],
+          "audio": "audio/s00_l00.wav",
+          "duration": 2.4503853,
+          "audio_start": 0.0629932
+        },
+        {
+          "speaker": "student",
+          "text": "Wait, what? Leaves make air?",
+          "pose": "shocked",
+          "listener_pose": "excited",
+          "shots": [
+            {
+              "kind": "talk",
+              "cue": "",
+              "title": "",
+              "text": "Leaves make AIR?!",
+              "emphasis": "",
+              "icon": "leaf",
+              "label": "",
+              "value": "",
+              "items": []
+            }
+          ],
+          "audio": "audio/s00_l01.wav",
+          "duration": 2.3229024,
+          "audio_start": 0.0584127
+        },
+        {
+          "speaker": "teacher",
+          "text": "Yep. It's called photosynthesis. Plants turn light, water and carbon dioxide into sugar and oxygen.",
+          "pose": "explain",
+          "listener_pose": "think",
+          "shots": [
+            {
+              "kind": "definition",
+              "cue": "",
+              "title": "Photosynthesis",
+              "text": "How plants turn light energy into chemical energy stored in sugar.",
+              "emphasis": "",
+              "icon": "sun",
+              "label": "",
+              "value": "",
+              "items": []
+            },
+            {
+              "kind": "flow",
+              "cue": "light",
+              "title": "The recipe",
+              "text": "",
+              "emphasis": "",
+              "icon": "",
+              "label": "",
+              "value": "",
+              "items": [
+                {
+                  "label": "Light",
+                  "icon": "sun",
+                  "note": ""
+                },
+                {
+                  "label": "Water",
+                  "icon": "water",
+                  "note": ""
+                },
+                {
+                  "label": "Carbon dioxide",
+                  "icon": "cloud",
+                  "note": ""
+                },
+                {
+                  "label": "Sugar",
+                  "icon": "apple",
+                  "note": ""
+                }
+              ]
+            }
+          ],
+          "audio": "audio/s00_l02.wav",
+          "duration": 6.433787,
+          "audio_start": 0.069070294
+        },
+        {
+          "speaker": "teacher",
+          "text": "Here's the whole thing as one equation.",
+          "pose": "point",
+          "listener_pose": "think",
+          "shots": [
+            {
+              "kind": "formula",
+              "cue": "",
+              "title": "The equation",
+              "text": "6 CO2 + 6 H2O → C6H12O6 + 6 O2",
+              "emphasis": "",
+              "icon": "",
+              "label": "carbon dioxide plus water makes glucose plus oxygen",
+              "value": "",
+              "items": []
+            }
+          ],
+          "audio": "audio/s00_l03.wav",
+          "duration": 1.5338323,
+          "audio_start": 0.085578226
+        }
+      ],
+      "quiz": {
+        "question": "What gas do plants release?",
+        "choices": [
+          "Carbon dioxide",
+          "Oxygen",
+          "Nitrogen"
+        ],
+        "answer_index": 1,
+        "explanation": "Oxygen is the by-product of splitting water."
+      }
+    },
+    {
+      "heading": "Inside the Chloroplast",
+      "lines": [
+        {
+          "speaker": "teacher",
+          "text": "All of this happens inside tiny green machines called chloroplasts.",
+          "pose": "point",
+          "listener_pose": "idle",
+          "shots": [
+            {
+              "kind": "icon",
+              "cue": "",
+              "title": "",
+              "text": "a tiny green solar panel",
+              "emphasis": "",
+              "icon": "cell",
+              "label": "Chloroplast",
+              "value": "",
+              "items": []
+            }
+          ],
+          "audio": "audio/s01_l00.wav",
+          "duration": 3.0263038,
+          "audio_start": 0.060589567
+        },
+        {
+          "speaker": "teacher",
+          "text": "There are two stages. The light reactions, and the Calvin cycle.",
+          "pose": "explain",
+          "listener_pose": "think",
+          "shots": [
+            {
+              "kind": "compare",
+              "cue": "",
+              "title": "",
+              "text": "",
+              "emphasis": "",
+              "icon": "",
+              "label": "",
+              "value": "",
+              "items": [
+                {
+                  "label": "Light reactions",
+                  "icon": "sun",
+                  "note": "make ATP and oxygen"
+                },
+                {
+                  "label": "Calvin cycle",
+                  "icon": "gear",
+                  "note": "builds sugar"
+                }
+              ]
+            }
+          ],
+          "audio": "audio/s01_l01.wav",
+          "duration": 3.6691155,
+          "audio_start": 0.075283445
+        },
+        {
+          "speaker": "student",
+          "text": "So plants get their energy from the soil, right?",
+          "pose": "confused",
+          "listener_pose": "facepalm",
+          "shots": [
+            {
+              "kind": "myth",
+              "cue": "",
+              "title": "Plants get their food from the soil",
+              "text": "Plants make their own food from light and air",
+              "emphasis": "",
+              "icon": "",
+              "label": "",
+              "value": "",
+              "items": []
+            }
+          ],
+          "audio": "audio/s01_l02.wav",
+          "duration": 2.4910204,
+          "audio_start": 0.06145125
+        },
+        {
+          "speaker": "teacher",
+          "text": "Nope! The Calvin cycle grabs carbon, fixes it, reduces it, and regenerates the starter molecule.",
+          "pose": "explain",
+          "listener_pose": "think",
+          "shots": [
+            {
+              "kind": "cycle",
+              "cue": "",
+              "title": "Calvin cycle",
+              "text": "",
+              "emphasis": "",
+              "icon": "",
+              "label": "",
+              "value": "",
+              "items": [
+                {
+                  "label": "Carbon",
+                  "icon": "cloud",
+                  "note": ""
+                },
+                {
+                  "label": "Fixes",
+                  "icon": "link",
+                  "note": ""
+                },
+                {
+                  "label": "Reduces",
+                  "icon": "battery",
+                  "note": ""
+                },
+                {
+                  "label": "Regenerates",
+                  "icon": "recycle",
+                  "note": ""
+                }
+              ]
+            }
+          ],
+          "audio": "audio/s01_l03.wav",
+          "duration": 6.132018,
+          "audio_start": 0.053877555
+        },
+        {
+          "speaker": "teacher",
+          "text": "Fun fact: plants capture about one hundred and thirty terawatts of energy.",
+          "pose": "excited",
+          "listener_pose": "shocked",
+          "shots": [
+            {
+              "kind": "number",
+              "cue": "",
+              "title": "",
+              "text": "of sunlight captured by plants every second",
+              "emphasis": "",
+              "icon": "lightning",
+              "label": "",
+              "value": "130 TW",
+              "items": []
+            }
+          ],
+          "audio": "audio/s01_l04.wav",
+          "duration": 3.6375508,
+          "audio_start": 0.13591838
+        }
+      ]
+    },
+    {
+      "heading": "Lock It In",
+      "lines": [
+        {
+          "speaker": "teacher",
+          "text": "Remember the inputs with the word SAW: sunlight, air, water.",
+          "pose": "point",
+          "listener_pose": "excited",
+          "shots": [
+            {
+              "kind": "mnemonic",
+              "cue": "",
+              "title": "SAW",
+              "text": "",
+              "emphasis": "",
+              "icon": "",
+              "label": "",
+              "value": "",
+              "items": [
+                {
+                  "label": "Sunlight",
+                  "icon": "sun",
+                  "note": ""
+                },
+                {
+                  "label": "Air",
+                  "icon": "cloud",
+                  "note": ""
+                },
+                {
+                  "label": "Water",
+                  "icon": "water",
+                  "note": ""
+                }
+              ]
+            }
+          ],
+          "audio": "audio/s02_l00.wav",
+          "duration": 3.5317914,
+          "audio_start": 0.052108847
+        },
+        {
+          "speaker": "student",
+          "text": "Okay, so why does any of this matter to me?",
+          "pose": "think",
+          "listener_pose": "idle",
+          "shots": [
+            {
+              "kind": "question",
+              "cue": "",
+              "title": "",
+              "text": "Why should you care?",
+              "emphasis": "",
+              "icon": "",
+              "label": "",
+              "value": "",
+              "items": []
+            }
+          ],
+          "audio": "audio/s02_l01.wav",
+          "duration": 2.2919726,
+          "audio_start": 0.041224487
+        },
+        {
+          "speaker": "teacher",
+          "text": "Because the light reactions, the Calvin cycle, and oxygen keep you alive. Let's recap.",
+          "pose": "cheer",
+          "listener_pose": "cheer",
+          "shots": [
+            {
+              "kind": "hub",
+              "cue": "",
+              "title": "Photosynthesis",
+              "text": "",
+              "emphasis": "",
+              "icon": "leaf",
+              "label": "",
+              "value": "",
+              "items": [
+                {
+                  "label": "Light reactions",
+                  "icon": "sun",
+                  "note": ""
+                },
+                {
+                  "label": "Calvin cycle",
+                  "icon": "gear",
+                  "note": ""
+                },
+                {
+                  "label": "Oxygen",
+                  "icon": "water",
+                  "note": ""
+                }
+              ]
+            },
+            {
+              "kind": "recap",
+              "cue": "recap",
+              "title": "Recap",
+              "text": "",
+              "emphasis": "",
+              "icon": "",
+              "label": "",
+              "value": "",
+              "items": [
+                {
+                  "label": "Light to sugar",
+                  "icon": "",
+                  "note": ""
+                },
+                {
+                  "label": "Two stages",
+                  "icon": "",
+                  "note": ""
+                },
+                {
+                  "label": "Oxygen is a by-product",
+                  "icon": "",
+                  "note": ""
+                }
+              ]
+            }
+          ],
+          "audio": "audio/s02_l02.wav",
+          "duration": 5.059864,
+          "audio_start": 0.08625851
+        },
+        {
+          "speaker": "teacher",
+          "text": "Over billions of years, this process built the air you breathe.",
+          "pose": "explain",
+          "listener_pose": "think",
+          "shots": [
+            {
+              "kind": "timeline",
+              "cue": "",
+              "title": "History of air",
+              "text": "",
+              "emphasis": "",
+              "icon": "",
+              "label": "",
+              "value": "",
+              "items": [
+                {
+                  "label": "No oxygen",
+                  "icon": "planet",
+                  "note": "4.5 bya"
+                },
+                {
+                  "label": "First algae",
+                  "icon": "sprout",
+                  "note": "3 bya"
+                },
+                {
+                  "label": "Forests",
+                  "icon": "tree",
+                  "note": "400 mya"
+                }
+              ]
+            },
+            {
+              "kind": "list",
+              "cue": "air",
+              "title": "Thanks plants",
+              "text": "",
+              "emphasis": "",
+              "icon": "",
+              "label": "",
+              "value": "",
+              "items": [
+                {
+                  "label": "Oxygen",
+                  "icon": "heart",
+                  "note": "you breathe it"
+                },
+                {
+                  "label": "Food",
+                  "icon": "apple",
+                  "note": "you eat it"
+                }
+              ]
+            }
+          ],
+          "audio": "audio/s02_l03.wav",
+          "duration": 2.9013603,
+          "audio_start": 0.05006803
+        }
+      ],
+      "quiz": {
+        "question": "Where does the Calvin cycle happen?",
+        "choices": [
+          "Mitochondria",
+          "Chloroplast",
+          "Nucleus",
+          "Roots"
+        ],
+        "answer_index": 1,
+        "explanation": "Both stages happen in the chloroplast."
+      }
+    }
+  ]
+}
