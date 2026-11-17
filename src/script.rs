@@ -1,5 +1,5 @@
 //! Turn extracted class material into a lesson script (dialogue + shot list)
-//! by asking the local `claude` CLI (Claude Code in print mode). No API key needed.
+//! by asking Gemini (via Antigravity or API) or the local `claude` CLI.
 
 use crate::icons::ICON_NAMES;
 use crate::lesson::{Lesson, POSE_NAMES, SHOT_NAMES};
@@ -20,6 +20,15 @@ pub enum CastMode {
     Solo,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum Provider {
+    /// Gemini (via Antigravity agy CLI or GEMINI_API_KEY)
+    #[default]
+    Gemini,
+    /// Claude (via Claude Code claude CLI)
+    Claude,
+}
+
 pub struct ScriptOptions {
     pub scenes: Option<u32>,
     pub focus: Option<String>,
@@ -27,6 +36,7 @@ pub struct ScriptOptions {
     /// Replaces DEFAULT_STYLE (loaded from --teaching <file>).
     pub teaching: Option<String>,
     pub cast: CastMode,
+    pub provider: Provider,
 }
 
 /// The teaching instructions. Override with `--teaching my_style.md`
@@ -87,14 +97,19 @@ Shot kinds and the fields they use:
 
 pub fn write_lesson(material: &str, opts: &ScriptOptions) -> Result<Lesson> {
     let prompt = build_prompt(material, opts);
-    let schema = schema(opts.cast).to_string();
+    let schema_val = schema(opts.cast);
+    let schema_str = schema_val.to_string();
     let mut last_err = None;
     for attempt in 1..=2 {
-        match ask_claude(&prompt, &schema, opts.model.as_deref()) {
+        let res = match opts.provider {
+            Provider::Claude => ask_claude(&prompt, &schema_str, opts.model.as_deref()),
+            Provider::Gemini => crate::gemini::ask_gemini(&prompt, &schema_val, opts.model.as_deref()),
+        };
+        match res {
             Ok(mut lesson) => {
                 lesson.sanitize();
                 if lesson.scenes.is_empty() {
-                    last_err = Some(anyhow!("Claude returned a lesson with no scenes"));
+                    last_err = Some(anyhow!("Model returned a lesson with no scenes"));
                 } else {
                     return Ok(lesson);
                 }
@@ -155,7 +170,7 @@ SCRIPT RULES
 - Each line is spoken aloud by text-to-speech: max 28 words (most lines much shorter), punchy conversational sentences, no markdown, no emoji, no bullet symbols, no parentheses. Spell out symbols and formulas in words (say "x squared", not "x^2").
 - Add a multiple-choice quiz to roughly every other scene, and always to the final recap scene. The quizzes are played together after the video, so they can recall anything from the lesson. 3-4 choices, answer_index is 0-based, explanation is 1-2 sentences. Quizzes should test understanding, not trivia. Vary which position holds the correct answer.
 
-Respond with only the JSON lesson.
+Do not call or use any tools. Respond with only the JSON lesson matching the schema.
 
 CLASS MATERIAL
 <<<
@@ -166,7 +181,7 @@ CLASS MATERIAL
     )
 }
 
-fn schema(cast: CastMode) -> Value {
+pub fn schema(cast: CastMode) -> Value {
     let speakers: &[&str] = match cast {
         CastMode::Duo => &["teacher", "student"],
         CastMode::Solo => &["narrator"],
@@ -257,9 +272,8 @@ fn ask_claude(prompt: &str, schema: &str, model: Option<&str>) -> Result<Lesson>
         "--system-prompt",
         "You are an award-winning educational scriptwriter and animation director. You output only valid JSON.",
     ]);
-    if let Some(m) = model {
-        cmd.args(["--model", m]);
-    }
+    // Sonnet writes great scripts and is much lighter on usage limits than the largest model.
+    cmd.args(["--model", model.unwrap_or("sonnet")]);
     // Allow running from inside a Claude Code terminal session.
     cmd.env_remove("CLAUDECODE");
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());

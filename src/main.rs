@@ -1,6 +1,7 @@
 mod audio;
 mod character;
 mod extract;
+mod gemini;
 mod gfx;
 mod icons;
 mod lesson;
@@ -81,9 +82,12 @@ enum Cmd {
         /// Topic or angle to focus on, e.g. "the midterm topics" or "explain the proofs"
         #[arg(long)]
         focus: Option<String>,
-        /// Claude model alias for script writing (e.g. opus, sonnet)
+        /// Model alias or name for script writing (e.g. gemini-2.5-flash or sonnet)
         #[arg(long)]
         model: Option<String>,
+        /// Provider for script writing: gemini (default, via Antigravity or GEMINI_API_KEY) or claude
+        #[arg(long, value_enum, default_value_t = script::Provider::Gemini)]
+        provider: script::Provider,
         /// Replace the teaching-style instructions with the contents of this file
         /// (see `stickstudy prompt` for the default)
         #[arg(long)]
@@ -110,22 +114,22 @@ enum Cmd {
     /// Save still frames of a lesson as PNGs (no video), e.g. to check a style
     Frames {
         dir: PathBuf,
-        /// Times in seconds (negative = from the end). Default: the middle of every shot
-        #[arg(long, num_args = 1.., allow_negative_numbers = true)]
+        /// Specific times in seconds to snapshot (default: 3/4 through each shot)
+        #[arg(long)]
         at: Vec<f32>,
-        #[arg(short, long, value_enum)]
+        /// Style to use for the snapshots (default: whatever style the lesson was made in)
+        #[arg(long, value_enum)]
         style: Option<styles::Style>,
         #[arg(long)]
         vertical: bool,
-        /// Where to put the PNGs (default: <lesson>/frames)
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
-    /// List voice engines and the voices installed on this computer
+    /// List the voice engines and the installed voices on your computer
     Voices,
     /// List the visual styles
     Styles,
-    /// Print the script instructions Claude follows (copy, edit, pass with --teaching)
+    /// Print the teaching-style prompt Claude and Gemini follow, so you can edit it
     Prompt,
 }
 
@@ -138,7 +142,7 @@ fn main() {
 
 fn run() -> Result<()> {
     match Cli::parse().cmd {
-        Cmd::Make { inputs, out, cast, scenes, focus, model, teaching, voice, video } => {
+        Cmd::Make { inputs, out, cast, scenes, focus, model, provider, teaching, voice, video } => {
             for p in &inputs {
                 if !p.exists() {
                     bail!("file not found: {}", p.display());
@@ -161,8 +165,12 @@ fn run() -> Result<()> {
             std::fs::write(dir.join("material.txt"), &material)?;
             eprintln!("  {} characters of text extracted", material.len());
 
-            eprintln!("✍️  Claude is writing the script and shot list (usually 1–4 minutes)…");
-            let opts = script::ScriptOptions { scenes, focus, model, teaching, cast };
+            let provider_name = match provider {
+                script::Provider::Gemini => "Gemini",
+                script::Provider::Claude => "Claude",
+            };
+            eprintln!("✍️  {provider_name} is writing the script and shot list…");
+            let opts = script::ScriptOptions { scenes, focus, model, teaching, cast, provider };
             let mut lesson = script::write_lesson(&material, &opts)?;
             lesson.style = video.style.unwrap_or_default();
             lesson.save(&dir)?;
