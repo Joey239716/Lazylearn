@@ -2299,13 +2299,23 @@ impl LazyApp {
             .filter(|j| j.0 == JobKind::Plan)
             .map(|(kind, st, _)| self.render_stage_cards(*kind, &st.lock().unwrap(), dir, cx));
         // build status
-        let (cur_video, cur_stage, build_frac, build_err) = match job.as_ref().filter(|j| j.0 == JobKind::Course) {
+        // per video (1-based): the stage it's in now and how far, while the build runs
+        type Flight = std::collections::HashMap<usize, (Option<stickstudy::progress::Stage>, Option<f32>)>;
+        let (in_flight, build_frac, build_err): (Flight, f32, Option<String>) = match job.as_ref().filter(|j| j.0 == JobKind::Course) {
             Some((kind, st, _)) => {
                 let st = st.lock().unwrap();
-                let stage = st.current().map(|c| (c.stage, c.frac.as_ref().map(|f| f.1)));
-                (st.video.filter(|_| !st.finished).map(|v| v.0), stage, st.overall(*kind), st.error.clone())
+                let map = if st.finished {
+                    Default::default()
+                } else {
+                    st.videos
+                        .iter()
+                        .filter(|(_, t)| !t.done)
+                        .map(|(i, t)| (*i, (t.running().map(|c| c.stage), t.running().and_then(|c| c.frac.as_ref().map(|f| f.1)))))
+                        .collect()
+                };
+                (map, st.overall(*kind), st.error.clone())
             }
-            None => (None, None, 0.0, None),
+            None => (Default::default(), 0.0, None),
         };
         let planning_failed = plan.is_none() && !running;
 
@@ -2320,7 +2330,8 @@ impl LazyApp {
                 let vdir = course.as_ref().and_then(|c| c.videos.get(i).cloned()).unwrap_or_default();
                 let vproj = self.projects.iter().find(|p| p.dir == vdir).cloned();
                 let is_made = vdir.join("video.mp4").is_file();
-                let is_current = cur_video == Some(i + 1);
+                let flight = in_flight.get(&(i + 1)).copied();
+                let is_current = flight.is_some() && !is_made;
                 let status: AnyElement = if is_made {
                     let p = vproj.clone();
                     div()
@@ -2345,9 +2356,9 @@ impl LazyApp {
                         .child(theme::icon("chevron-right").size(px(14.)))
                         .into_any_element()
                 } else if is_current {
-                    let (label, f) = match cur_stage {
-                        Some((s, f)) => (short_stage(s), f),
-                        None => ("Starting", None),
+                    let (label, f) = match flight {
+                        Some((Some(s), f)) => (short_stage(s), f),
+                        _ => ("Starting", None),
                     };
                     div()
                         .flex()
