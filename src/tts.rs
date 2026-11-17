@@ -88,7 +88,7 @@ impl Voice {
     pub fn describe(&self) -> String {
         match self.backend {
             Backend::None => "no voice (subtitles only)".into(),
-            b => format!("{b:?} — teacher: {}, student: {}", self.teacher, self.student),
+            b => format!("{b:?} — teacher/narrator: {}, student: {}", self.teacher, self.student),
         }
     }
 

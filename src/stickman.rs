@@ -236,7 +236,7 @@ impl Actor {
 
         // eyes (looking toward facing side)
         let blinking = t > self.blink_at && t < self.blink_at + 0.15;
-        for ex in [0.12, 0.5] {
+        for ex in [0.02, 0.56] {
             let e = rot(vec2(ex * f * HEAD_R, -0.05 * HEAD_R));
             if blinking {
                 draw_line(e.x - 4.0, e.y, e.x + 4.0, e.y, 2.5, INK);
@@ -244,12 +244,12 @@ impl Actor {
                 draw_circle(e.x, e.y, 3.6, INK);
             }
             if self.look == Look::Teacher {
-                draw_circle_lines(e.x, e.y, 8.5, 2.0, INK);
+                draw_circle_lines(e.x, e.y, 7.5, 2.0, INK);
             }
         }
         if self.look == Look::Teacher {
-            let a = rot(vec2((0.12 + 0.13) * f * HEAD_R, -0.05 * HEAD_R));
-            let b = rot(vec2((0.5 - 0.13) * f * HEAD_R, -0.05 * HEAD_R));
+            let a = rot(vec2(0.02 * f * HEAD_R + 7.5 * f, -0.05 * HEAD_R));
+            let b = rot(vec2(0.56 * f * HEAD_R - 7.5 * f, -0.05 * HEAD_R));
             draw_line(a.x, a.y, b.x, b.y, 2.0, INK);
         }
 

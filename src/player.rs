@@ -14,14 +14,14 @@ const H: f32 = 720.0;
 const GAP: f32 = 0.22; // snappy pause between lines
 const FLOOR: f32 = 600.0;
 
-pub(crate) const BOARD: Rect = Rect { x: 330.0, y: 96.0, w: 620.0, h: 330.0 };
+pub(crate) const BOARD: Rect = Rect { x: 330.0, y: 114.0, w: 620.0, h: 316.0 };
 pub(crate) const TEACH_COL: Color = Color::new(0.82, 0.2, 0.22, 1.0);
 pub(crate) const STUD_COL: Color = Color::new(0.2, 0.45, 0.85, 1.0);
 pub(crate) const CHALK: Color = Color::new(0.95, 0.95, 0.9, 1.0);
 pub(crate) const GOOD: Color = Color::new(0.2, 0.62, 0.32, 1.0);
 pub(crate) const BAD: Color = Color::new(0.82, 0.25, 0.22, 1.0);
 
-pub fn run(lesson: Lesson, dir: PathBuf) {
+pub fn run(lesson: Lesson, dir: PathBuf, start_scene: usize, mute: bool) {
     let conf = Conf {
         window_title: format!("StickStudy — {}", lesson.title),
         window_width: W as i32,
@@ -32,7 +32,7 @@ pub fn run(lesson: Lesson, dir: PathBuf) {
         ..Default::default()
     };
     macroquad::Window::from_config(conf, async move {
-        player_main(lesson, dir).await;
+        player_main(lesson, dir, start_scene, mute).await;
         std::process::exit(0);
     });
 }
@@ -126,7 +126,7 @@ pub(crate) struct Player {
 }
 
 impl Player {
-    fn new(lesson: Lesson, dir: &PathBuf) -> Player {
+    fn new(lesson: Lesson, dir: &PathBuf, mute: bool) -> Player {
         let clips = lesson
             .scenes
             .iter()
@@ -142,10 +142,11 @@ impl Player {
                     .collect()
             })
             .collect();
-        let audio = rodio::OutputStream::try_default()
-            .ok()
+        let audio = (!mute)
+            .then(rodio::OutputStream::try_default)
+            .and_then(|r| r.ok())
             .map(|(s, h)| Audio { _stream: s, handle: h, sink: None });
-        if audio.is_none() {
+        if audio.is_none() && !mute {
             eprintln!("⚠️  no audio output device found — playing silently");
         }
         let n = lesson.scenes.len();
@@ -287,29 +288,67 @@ impl Player {
     }
 }
 
-async fn player_main(lesson: Lesson, dir: PathBuf) {
+async fn player_main(lesson: Lesson, dir: PathBuf, start_scene: usize, mute: bool) {
     let fonts = Fonts {
         ui: load_font("/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf"),
         chalk: load_font("/System/Library/Fonts/Supplemental/Chalkduster.ttf"),
         hand: load_font("/System/Library/Fonts/Supplemental/Comic Sans MS Bold.ttf"),
     };
-    let mut p = Player::new(lesson, &dir);
+    let mut p = Player::new(lesson, &dir, mute);
+    if start_scene > 0 {
+        p.goto(start_scene);
+    }
+    // Debug/testing hook: STICKSTUDY_SNAPSHOT=out.png [STICKSTUDY_SNAPSHOT_AT=secs]
+    // [STICKSTUDY_SNAPSHOT_PHASE=quiz|answered|done] renders a frame to a PNG and exits.
+    let snapshot = std::env::var("STICKSTUDY_SNAPSHOT").ok();
+    let snap_at: f32 = std::env::var("STICKSTUDY_SNAPSHOT_AT").ok().and_then(|v| v.parse().ok()).unwrap_or(3.0);
+    match std::env::var("STICKSTUDY_SNAPSHOT_PHASE").as_deref() {
+        Ok("quiz") | Ok("answered") => {
+            while p.lesson.scenes[p.scene].quiz.is_none() && p.scene + 1 < p.lesson.scenes.len() {
+                p.goto(p.scene + 1);
+            }
+            p.end_of_scene();
+            if std::env::var("STICKSTUDY_SNAPSHOT_PHASE").as_deref() == Ok("answered") {
+                p.answer(0);
+            }
+        }
+        Ok("done") => {
+            p.goto(p.lesson.scenes.len() - 1);
+            p.results[0] = Some(true);
+            p.next_scene();
+        }
+        _ => {}
+    }
+    let started = get_time() as f32;
 
     loop {
         let dt = get_frame_time().min(0.05);
         let time = get_time() as f32;
 
         // letterboxed 16:9 camera
+        // screen_width() is in logical points; the GL viewport wants physical
+        // pixels (2x on Retina), so scale by the DPI factor.
+        let dpi = screen_dpi_scale();
         let (sw, sh) = (screen_width(), screen_height());
-        let px = (sw / W).min(sh / H);
-        let (vw, vh) = (W * px, H * px);
-        let cam = Camera2D {
-            viewport: Some((((sw - vw) / 2.0) as i32, ((sh - vh) / 2.0) as i32, vw as i32, vh as i32)),
+        let pt = (sw / W).min(sh / H);
+        let (vw, vh) = (W * pt, H * pt);
+        let px = pt * dpi;
+        let mut cam = Camera2D {
+            viewport: Some((
+                ((sw - vw) / 2.0 * dpi) as i32,
+                ((sh - vh) / 2.0 * dpi) as i32,
+                (vw * dpi) as i32,
+                (vh * dpi) as i32,
+            )),
             ..Camera2D::from_display_rect(Rect::new(0.0, 0.0, W, H))
         };
+        // macroquad 0.4's from_display_rect is y-up; flip it so y grows downward
+        // like screen coordinates (otherwise the whole scene renders upside down).
+        cam.zoom.y = -cam.zoom.y;
         clear_background(BLACK);
         set_camera(&cam);
-        let mouse = cam.screen_to_world(mouse_position().into());
+        let (mx, my) = mouse_position();
+        let mouse = vec2((mx - (sw - vw) / 2.0) / pt, (my - (sh - vh) / 2.0) / pt);
         let clicked = is_mouse_button_pressed(MouseButton::Left);
         let ink = Ink { px, fonts: &fonts };
 
@@ -404,6 +443,14 @@ async fn player_main(lesson: Lesson, dir: PathBuf) {
             ink.centered(ink.ui(), "press Space to resume", W / 2.0, H / 2.0 + 44.0, 22.0, WHITE);
         }
 
+        if let Some(path) = &snapshot {
+            if get_time() as f32 - started >= snap_at {
+                get_screen_data().export_png(path);
+                p.stop_audio();
+                break;
+            }
+        }
+
         next_frame().await;
     }
 }
@@ -432,7 +479,7 @@ fn draw_header(p: &mut Player, ink: &Ink, mouse: Vec2, clicked: bool, dark: bool
         let hover = Rect::new(x, y - 8.0, seg_w, 24.0).contains(mouse);
         let base = match (hover, dark) {
             (true, _) => Color::new(0.75, 0.75, 0.8, 1.0),
-            (false, false) => Color::new(0.88, 0.87, 0.84, 1.0),
+            (false, false) => Color::new(0.0, 0.0, 0.0, 0.1),
             (false, true) => Color::new(1.0, 1.0, 1.0, 0.18),
         };
         draw_rectangle(x, y, seg_w, 8.0, base);

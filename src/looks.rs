@@ -170,8 +170,8 @@ pub fn explainer(p: &Player, ink: &Ink, time: f32) {
     let pc = PALETTE[si % PALETTE.len()];
     let drift = (time * 0.15).sin() * 12.0;
     let planet = vec2(1170.0 + drift, 690.0);
-    draw_circle(planet.x, planet.y, 240.0, Color::new(pc.r * 0.55, pc.g * 0.55, pc.b * 0.6, 1.0));
-    draw_circle(planet.x - 30.0, planet.y - 30.0, 205.0, Color::new(pc.r * 0.7, pc.g * 0.7, pc.b * 0.75, 1.0));
+    draw_poly(planet.x, planet.y, 96, 240.0, 0.0, Color::new(pc.r * 0.55, pc.g * 0.55, pc.b * 0.6, 1.0));
+    draw_poly(planet.x - 30.0, planet.y - 30.0, 96, 205.0, 0.0, Color::new(pc.r * 0.7, pc.g * 0.7, pc.b * 0.75, 1.0));
     draw_ellipse_lines(planet.x, planet.y, 330.0, 46.0, -0.25, 6.0, Color::new(1.0, 1.0, 1.0, 0.25));
     let moon = vec2(120.0 + drift * 0.5, 150.0);
     draw_circle(moon.x, moon.y, 26.0, Color::new(0.85, 0.85, 0.95, 0.9));
@@ -378,7 +378,7 @@ pub fn whiteboard(p: &Player, ink: &Ink, time: f32) {
             if prog > 0.6 {
                 let rows = ink.wrap(ink.hand(), &v.label, 170.0, 20.0);
                 for (j, row) in rows.iter().enumerate() {
-                    ink.centered(ink.hand(), row, pts[i].x, pts[i].y + 7.0 + j as f32 * 24.0 - (rows.len() as f32 - 1.0) * 12.0, 20.0, col);
+                    ink.centered(ink.hand(), row, pts[i].x, pts[i].y + r * 1.15 + 22.0 + j as f32 * 24.0, 20.0, col);
                 }
             }
         }

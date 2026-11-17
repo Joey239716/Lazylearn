@@ -56,7 +56,15 @@ enum Cmd {
         no_play: bool,
     },
     /// Watch a lesson you already made
-    Play { dir: PathBuf },
+    Play {
+        dir: PathBuf,
+        /// Start from this scene number
+        #[arg(long, default_value_t = 1)]
+        scene: usize,
+        /// Play without sound
+        #[arg(long)]
+        mute: bool,
+    },
     /// Re-generate the voices of an existing lesson (try different engines!)
     Revoice {
         dir: PathBuf,
@@ -121,12 +129,12 @@ fn run() -> Result<()> {
             eprintln!("✅ Lesson saved to {}", dir.display());
             eprintln!("   watch again any time:  stickstudy play {}", dir.display());
             if !no_play {
-                player::run(lesson, dir);
+                player::run(lesson, dir, 0, false);
             }
         }
-        Cmd::Play { dir } => {
+        Cmd::Play { dir, scene, mute } => {
             let lesson = Lesson::load(&dir)?;
-            player::run(lesson, dir);
+            player::run(lesson, dir, scene.saturating_sub(1), mute);
         }
         Cmd::Revoice { dir, voice } => {
             let mut lesson = Lesson::load(&dir)?;
