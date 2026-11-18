@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use stickstudy::lesson::Quiz;
 use stickstudy::pipeline::{self, CourseOptions, LessonInfo, MakeOptions, VideoOptions};
 use stickstudy::script::Recipe;
-use stickstudy::{omnivoice, script, styles, tts};
+use stickstudy::{omnivoice, styles, tts};
 
 const SIDEBAR_W: f32 = 264.;
 const COLUMN_W: f32 = 780.;
@@ -45,6 +45,7 @@ enum Menu {
     Style,
     Cast,
     Teacher,
+    #[allow(dead_code)] // the student voice is picked in Settings (SetStudent)
     Student,
     Energy,
     Pace,
@@ -2011,10 +2012,10 @@ impl LazyApp {
             }
             meta.push(library::ago(p.created));
             if p.question_count > 0 {
-                meta.push(format!("{} quiz questions", p.question_count));
+                meta.push(format!("{} quiz question{}", p.question_count, if p.question_count == 1 { "" } else { "s" }));
             }
             if p.card_count > 0 {
-                meta.push(format!("{} flashcards", p.card_count));
+                meta.push(format!("{} flashcard{}", p.card_count, if p.card_count == 1 { "" } else { "s" }));
             }
         }
         let has_video = proj.as_ref().map(|p| p.video.is_some() || p.vertical_video.is_some()).unwrap_or(false);
@@ -3256,7 +3257,7 @@ impl LazyApp {
             .map(|(i, ch)| {
                 let correct = i == qq.answer_index;
                 let (border_c, bg_c, badge_c) = match picked {
-                    Some(p) if correct => (ca(0x3ecf8e, 0.6), ca(0x3ecf8e, 0.09), green()),
+                    Some(_) if correct => (ca(0x3ecf8e, 0.6), ca(0x3ecf8e, 0.09), green()),
                     Some(p) if p == i => (ca(0xf0645a, 0.6), ca(0xf0645a, 0.09), red()),
                     Some(_) => (border(), transparent_black(), faint()),
                     None => (border2(), transparent_black(), muted()),
