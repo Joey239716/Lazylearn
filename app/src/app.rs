@@ -3163,6 +3163,7 @@ impl LazyApp {
                 .child(
                     div()
                         .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .gap(px(3.))
@@ -3173,7 +3174,7 @@ impl LazyApp {
                             (None, false) => format!("{n} questions. Opens when the video ends, or take it now."),
                         })),
                 )
-                .child(pill_btn("take-quiz", if best.is_some() { "Retake quiz" } else { "Take the quiz" }).on_click(cx.listener(move |this, _, window, cx| {
+                .child(pill_btn("take-quiz", if best.is_some() { "Retake quiz" } else { "Take the quiz" }).flex_shrink_0().on_click(cx.listener(move |this, _, window, cx| {
                     if let Some(p) = &mut this.player {
                         if p.playing {
                             p.pause();
@@ -3293,7 +3294,7 @@ impl LazyApp {
                                 _ => format!("{}", i + 1).into_any_element(),
                             }),
                     )
-                    .child(div().flex_1().text_size(px(14.)).line_height(px(20.)).child(ch.clone()))
+                    .child(div().flex_1().min_w_0().text_size(px(14.)).line_height(px(20.)).child(ch.clone()))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.quiz_pick(i);
                         window.focus(&this.focus, cx);
@@ -3324,6 +3325,7 @@ impl LazyApp {
                         .child(
                             div()
                                 .flex_1()
+                        .min_w_0()
                                 .flex()
                                 .flex_col()
                                 .gap(px(4.))
@@ -3340,6 +3342,7 @@ impl LazyApp {
                         )
                         .child(
                             pill_btn("next", if q.idx + 1 < total { "Next" } else { "See score" })
+                                .flex_shrink_0()
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.quiz_next();
                                     window.focus(&this.focus, cx);
@@ -3395,6 +3398,7 @@ impl LazyApp {
                         .child(
                             div()
                                 .flex_1()
+                        .min_w_0()
                                 .flex()
                                 .flex_col()
                                 .gap(px(3.))
@@ -3511,12 +3515,14 @@ impl LazyApp {
                         .child(div().text_size(px(16.)).line_height(px(25.)).text_color(text()).child(card.back.clone()))
                 } else {
                     d.child(
-                        div().flex_1().flex().items_center().justify_center().child(
+                        div().flex_1().w_full().min_w_0().flex().items_center().justify_center().child(
                             div()
                                 .text_size(px(if is_q { 20. } else { 26. }))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .line_height(px(if is_q { 29. } else { 34. }))
                                 .text_center()
+                                .w_full()
+                                .min_w_0()
                                 .child(card.front.clone()),
                         ),
                     )
