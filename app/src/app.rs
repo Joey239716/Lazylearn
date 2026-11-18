@@ -3,7 +3,7 @@
 
 use crate::jobs::{Job, JobKind, JobState, StageStatus};
 use crate::library::{self, Project, QuizResult};
-use crate::player::{fmt_time, Player};
+use crate::player::{fmt_time, Player, SPEEDS};
 use crate::settings::Settings;
 use crate::theme::{self, *};
 use crate::theme::{green, red};
@@ -170,6 +170,8 @@ pub struct LazyApp {
     // project view
     player: Option<Player>,
     player_vertical: bool,
+    /// the playback-speed picker is open
+    speed_open: bool,
     quiz: Option<QuizRun>,
     cards: Option<CardRun>,
     theater: bool,
@@ -295,6 +297,7 @@ impl LazyApp {
             search,
             player: None,
             player_vertical: false,
+            speed_open: false,
             quiz: None,
             cards: None,
             theater: false,
@@ -346,6 +349,10 @@ impl LazyApp {
         if let (Some(t), Some(p)) = (env("LAZYLEARN_SEEK"), &mut self.player) {
             p.seek(t.parse().unwrap_or(0.0));
         }
+        if let (Some(v), Some(p)) = (env("LAZYLEARN_SPEED"), &mut self.player) {
+            p.set_speed(v.parse().unwrap_or(1.0));
+        }
+        self.speed_open = env("LAZYLEARN_SPEEDMENU").is_some();
         if let (Some(_), Some(p)) = (env("LAZYLEARN_PLAY"), &mut self.player) {
             p.play();
         }
@@ -485,7 +492,7 @@ impl LazyApp {
             .or_else(|| proj.vertical_video.clone());
         if let Some(f) = file {
             self.player_vertical = f.file_name().map(|n| n.to_string_lossy().contains("vertical")).unwrap_or(false);
-            self.player = Some(Player::open(f, self.settings.ffmpeg_bin(), proj.duration, autoplay));
+            self.player = Some(Player::open(f, self.settings.ffmpeg_bin(), proj.duration, autoplay, self.settings.playback_speed));
         }
     }
 
@@ -885,6 +892,14 @@ impl LazyApp {
                     p.seek(t + 5.0)
                 }
                 "m" => p.set_volume(if p.volume > 0.0 { 0.0 } else { 1.0 }),
+                // , / . (or < / >): slower / faster
+                "," | "." | "<" | ">" => {
+                    let i = SPEEDS.iter().position(|s| (s - p.speed).abs() < 0.01).unwrap_or(1);
+                    let j = if matches!(k, "," | "<") { i.saturating_sub(1) } else { (i + 1).min(SPEEDS.len() - 1) };
+                    p.set_speed(SPEEDS[j]);
+                    self.settings.playback_speed = SPEEDS[j];
+                    self.settings.save();
+                }
                 "f" => {
                     let on = !self.theater;
                     self.set_theater(on, window);
@@ -908,7 +923,7 @@ impl Render for LazyApp {
         }
         if let Some(p) = &mut self.player {
             p.tick(window);
-            if p.playing || !p.ready() || p.frame.is_none() {
+            if p.playing || !p.ready() || p.buffering() || p.frame.is_none() {
                 window.request_animation_frame();
             }
             if p.ended && self.quiz.is_none() {
@@ -2955,7 +2970,9 @@ impl LazyApp {
         let playing = p.playing;
         let muted_ = p.volume == 0.0;
         let frame = p.frame.clone();
-        let loading = frame.is_none();
+        let loading = frame.is_none() || p.buffering();
+        let speed = p.speed;
+        let speed_open = self.speed_open;
         let dir = match &self.page {
             Page::Project(d) => Some(d.clone()),
             _ => None,
@@ -3069,6 +3086,7 @@ impl LazyApp {
                             .child(format!("{} / {}", fmt_time(shown_t), fmt_time(dur))),
                     )
                     .child(div().flex_1())
+                    .child(self.speed_picker(speed, speed_open, cx))
                     .when(has_both, |d| {
                         let vertical = self.player_vertical;
                         let dir = dir.clone();
@@ -3127,12 +3145,73 @@ impl LazyApp {
             })
             .child(controls)
             .on_click(cx.listener(|this, _, window, cx| {
+                if this.speed_open {
+                    this.speed_open = false;
+                    cx.notify();
+                    return;
+                }
                 if let Some(p) = &mut this.player {
                     p.toggle();
                 }
                 window.focus(&this.focus, cx);
                 cx.notify();
             }))
+    }
+
+    /// "1×" in the player controls; opens into a row of speeds.
+    fn speed_picker(&self, speed: f32, open: bool, cx: &mut Context<Self>) -> AnyElement {
+        let label = |s: f32| format!("{}×", format!("{s}").trim_end_matches(".0"));
+        let pill = |id: SharedString| {
+            div()
+                .id(id)
+                .h(px(26.))
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .rounded(px(6.))
+                .text_size(px(12.))
+                .font_family(MONO)
+                .cursor_pointer()
+        };
+        if !open {
+            return pill("speed".into())
+                .gap(px(5.))
+                .text_color(if (speed - 1.0).abs() < 0.01 { ca(0xffffff, 0.85) } else { gold() })
+                .hover(|s| s.bg(ca(0xffffff, 0.12)))
+                .child(theme::icon("gauge").size(px(13.)))
+                .child(label(speed))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.speed_open = true;
+                    cx.notify();
+                }))
+                .into_any_element();
+        }
+        div()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .p(px(2.))
+            .rounded(px(8.))
+            .bg(ca(0x000000, 0.45))
+            .children(SPEEDS.iter().map(|&s| {
+                let sel = (s - speed).abs() < 0.01;
+                pill(format!("speed-{s}").into())
+                    .map(|d| if sel { d.bg(text()).text_color(c(0x0b0b0c)) } else { d.text_color(ca(0xffffff, 0.85)).hover(|h| h.bg(ca(0xffffff, 0.12))) })
+                    .child(label(s))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        if let Some(p) = &mut this.player {
+                            p.set_speed(s);
+                        }
+                        this.settings.playback_speed = s;
+                        this.settings.save();
+                        this.speed_open = false;
+                        window.focus(&this.focus, cx);
+                        cx.notify();
+                    }))
+            }))
+            .into_any_element()
     }
 
     fn render_quiz(&self, dir: &Path, cx: &mut Context<Self>) -> impl IntoElement {

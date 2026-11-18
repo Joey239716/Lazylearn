@@ -26,6 +26,8 @@ pub struct Settings {
     pub vision: bool,
     /// the composer makes a course (several videos) by default
     pub course_mode: bool,
+    /// video playback speed (0.75 / 1 / 1.25 / 1.5 / 2)
+    pub playback_speed: f32,
 }
 
 impl Default for Settings {
@@ -44,6 +46,7 @@ impl Default for Settings {
             vertical: false,
             vision: true,
             course_mode: true,
+            playback_speed: 1.0,
         }
     }
 }
