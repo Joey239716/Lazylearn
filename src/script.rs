@@ -148,6 +148,10 @@ pub fn write_lesson(material: &str, opts: &ScriptOptions, p: &crate::progress::P
         match res {
             Ok(mut lesson) => {
                 lesson.sanitize();
+                let qs: Vec<_> = lesson.scenes.iter_mut().filter_map(|s| s.quiz.as_mut()).collect();
+                if let Err(e) = crate::study::balance(qs, opts.provider, opts.model.as_deref()) {
+                    p.info(format!("couldn't even out the quiz answer lengths: {e:#}"));
+                }
                 if lesson.scenes.is_empty() {
                     last_err = Some(anyhow!("Model returned a lesson with no scenes"));
                 } else {
@@ -214,7 +218,7 @@ LENGTH
 SCRIPT RULES
 - Each scene: a short heading (max 5 words, shown on a chapter card) and 4-12 lines.
 - Each line is spoken aloud by text-to-speech: max 28 words (most lines much shorter), punchy conversational sentences, no markdown, no emoji, no bullet symbols, no parentheses. Spell out symbols and formulas in words (say "x squared", not "x^2").
-- Add a multiple-choice quiz to roughly every other scene, and always to the final recap scene. The quizzes are played together after the video, so they can recall anything from the lesson. 3-4 choices, answer_index is 0-based, explanation is 1-2 sentences. Quizzes should test understanding, not trivia.
+- Add a multiple-choice quiz to roughly every other scene, and always to the final recap scene. The quizzes are played together after the video, so they can recall anything from the lesson. 3-4 choices, answer_index is 0-based, explanation is 1-2 sentences. Quizzes should test understanding, not trivia. Make all choices about the same length and detail; the right answer must never stand out by being the longest or most specific.
 
 Do not call or use any tools. Respond with only the JSON lesson matching the schema. Leave out any field you don't use (no empty strings or empty lists).
 

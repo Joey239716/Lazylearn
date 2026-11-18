@@ -140,6 +140,15 @@ enum Cmd {
         #[arg(long)]
         focus: Option<String>,
     },
+    /// Fix quizzes whose right answer gives itself away by being the longest choice
+    /// (rewrites those choices to even lengths, then shuffles). Takes lesson folders.
+    FixQuiz {
+        dirs: Vec<PathBuf>,
+        #[arg(long, value_enum, default_value_t = script::Provider::Gemini)]
+        provider: script::Provider,
+        #[arg(long)]
+        model: Option<String>,
+    },
     /// Re-render the video of an existing lesson (e.g. in a different style)
     Render {
         dir: PathBuf,
@@ -262,6 +271,20 @@ fn run() -> Result<()> {
             let focus = focus.or(info.focus.clone()).unwrap_or_else(|| "The key terms and study questions in this material.".into());
             let title = if info.title.is_empty() { "Study set".to_string() } else { info.title.clone() };
             pipeline::write_study_set(&dir, &title, &material, &focus, provider, model.as_deref(), &Progress::cli())?;
+        }
+        Cmd::FixQuiz { dirs, provider, model } => {
+            for dir in dirs {
+                let path = dir.join("quiz.json");
+                let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                let mut v: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("reading {}", path.display()))?;
+                let mut qs: Vec<stickstudy::lesson::Quiz> = serde_json::from_value(v["questions"].clone())?;
+                let before = qs.iter().filter(|q| stickstudy::study::telltale(q)).count();
+                let n = stickstudy::study::balance(qs.iter_mut().collect(), provider, model.as_deref())?;
+                let after = qs.iter().filter(|q| stickstudy::study::telltale(q)).count();
+                v["questions"] = serde_json::to_value(&qs)?;
+                std::fs::write(&path, serde_json::to_string_pretty(&v)?)?;
+                println!("{}: {} questions, {before} gave the answer away by length, rewrote {n}, {after} left", dir.display(), qs.len());
+            }
         }
         Cmd::Render { dir, video } => {
             let mut lesson = Lesson::load(&dir)?;
