@@ -4,3 +4,24 @@
 /lessons/test/*
 !/lessons/test/lesson.json
 .DS_Store
+
+# Your own material and videos never belong in the repo (lessons/ is ignored above;
+# this also catches files dropped anywhere else).
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.wav
+*.mp3
+*.m4a
+*.srt
+*.vtt
+*.pdf
+*.pptx
+*.ppt
+*.docx
+*.key
+.vision/
+.render/
+quiz_results.json
+flashcard_results.json

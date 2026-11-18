@@ -1,128 +1,110 @@
-# StickStudy 🎓
+<p align="center">
+  <img src="assets/logo/lazylearn-256.png" width="120" alt="Lazylearn logo" />
+</p>
 
-Turn your class material into a fun, fully animated study video: doodle characters, props that pop in
-as they're mentioned, diagrams that draw themselves, kinetic captions, sound effects and music, plus a
-quiz to take afterwards.
+<h1 align="center">Lazylearn</h1>
 
-The script is written by your local **Claude Code** (`claude` command), so you don't need an API key.
-It runs on **Windows and macOS**.
+<p align="center"><b>Turn your class material into animated study videos, then lock it in with quizzes and flashcards.</b></p>
 
-## Quick start
+<p align="center">
+  <img src="docs/screenshots/quiz.png" width="820" alt="A Lazylearn lesson: the video player with a quiz underneath" />
+</p>
 
-You need [Rust](https://rustup.rs), [ffmpeg](https://ffmpeg.org/download.html) on your PATH, and Claude Code.
+---
 
-```bash
-cargo build --release
-./target/release/stickstudy make lecture5.pdf
-```
+Studying from a 60-slide deck or a 40-page reading is hard to start and easy to zone out of. Lazylearn
+turns that material into something you actually want to watch: short, fast, animated explainer videos
+in the style of YouTube Shorts and TikTok study content. They still teach from scratch, so you
+understand the material, not just skim it.
 
-That reads the file, has Claude write a script and a shot list, records the voices, and renders
-`lessons/lecture5/video.mp4` (plus `video.srt` subtitles and `quiz.json`).
+Drop in your slides, notes or lecture transcript, say what you need ("chapters 7–11 for my midterm,
+I mostly need the key terms"), and Lazylearn writes the lesson, voices it, animates it and renders a
+video. When the video ends, a quiz is waiting, then a deck of flashcards.
 
-Works with: **PDF**, **PowerPoint (.pptx)**, transcripts (**.vtt / .srt / .txt**) and Markdown notes.
-Pass several files to combine them into one lesson.
+## What you get
 
-## What's in a video
+**Animated lessons, not slideshows.** Every video is made of many short shots that change every few
+seconds: kinetic titles, definitions, step-by-step flows, cycles, side-by-side comparisons, timelines,
+formulas that build themselves, mnemonics, "myth vs. fact" busters and recap checklists. Icons and
+diagrams pop in at the exact moment they're mentioned, and every cut has a transition.
 
-- **Intro and chapter cards**: each part of the lesson gets its own animated title card.
-- **16 kinds of shots**, picked by Claude to suit the content: kinetic titles, definitions, flows,
-  cycles, A vs B comparisons, counting-up numbers, equations, mnemonic letter tiles, MYTH → FACT
-  busters, timelines, ticked-off recaps and more. The picture changes every few seconds.
-- **Props that animate**: gears turn, hearts beat, DNA twists, electrons orbit. There are about 90 of them.
-- **A doodle cast**: teacher and student (or one narrator) with poses, blinking and lip-sync.
-- **Sync**: each item pops in at the moment the narrator says it, with its own sound effect.
-- **Transitions** between every shot: whips, zooms, pop-swaps and circle wipes.
-- **TikTok-style captions**, with the word being spoken highlighted.
-- **Background music** that gets quieter under the voice: a built-in lo-fi loop, or your own track.
+**A cast that teaches.** A doodle teacher and a curious student talk through the material together,
+with poses, blinking and lip-sync. Or pick a single narrator who talks straight to you. Voices are
+generated on your computer, with presets from calm to full YouTube-host energy.
 
+**Captions, sound and music.** Burned-in captions highlight each word as it's spoken. Sound effects
+land on every pop and stamp, and background music drops under the voice. Subtitles are saved too.
 
-## Courses: split material into several videos
+**Several looks.** Doodle (paper and black line art), Cosmic (neon on deep space), Whiteboard and
+Chalk. You can re-render any lesson in another style without remaking it.
 
-Got a whole textbook, a pile of readings, or a semester of slides? Describe what you need in plain words
-and Lazylearn plans a series of videos, then makes them:
+**Widescreen or vertical.** Videos are 16:9 by default. Add a 9:16 version for your phone, or make
+only the vertical one.
 
-```bash
-stickstudy course reader.pdf -d "Split it by chapter. I only need the term definitions and how to answer
-the questions at the end of each chapter, plus a solid enough understanding of the material."
-```
+## Projects: a whole review session
 
-Gemini reads everything (including diagrams and scanned pages) and proposes a plan. Each video gets a part
-of the material and a **format**:
+<p align="center">
+  <img src="docs/screenshots/project.png" width="820" alt="A review project: progress, the list of videos and the review quiz" />
+</p>
 
-| Format | What the video does |
-|---|---|
-| `overview` | understand the material: big picture, key ideas, examples, traps, recap |
-| `terms` | drill every key term: exact definition, example, memory hook, definition quizzes |
-| `questions` | how to answer the review / end-of-chapter questions: what each asks, key points, model answer, common mistake |
-| `cram` | only what's most likely to be tested, fast |
+For an exam you rarely need just one video. A **project** is a full review session: hand Lazylearn a
+textbook, a reader or a semester of slides and describe how you want it split, for example "one video
+per chapter; I need the term definitions and how to answer the end-of-chapter questions".
 
-You see the plan and confirm it before anything gets made. `--plan-only` saves it as `plan.json` so you can
-edit it (titles, formats, focus, which part each video covers). Run `stickstudy course <course folder>` to make
-it, or to continue after a stop: finished videos are skipped. `--only 2 5` makes just those videos. Each video
-is a normal lesson folder inside the course folder. A single video can use a format too:
-`stickstudy make notes.pdf --recipe terms`.
+Lazylearn reads everything, including diagrams, charts, tables and scanned pages, and proposes a plan:
+a list of videos, each with the part of the material it covers and a format:
 
-## Commands
+- **Chapter**: the whole chapter in one video, with every key term and everything you need for the study questions
+- **Overview**: the big picture, key ideas, examples and common traps
+- **Terms**: a drill of every key term with a definition, an example and a memory hook
+- **Questions**: how to answer the review questions, with model answers
+- **Cram**: only what's most likely to be on the test, fast
 
-| Command | What it does |
-|---|---|
-| `stickstudy make <files…>` | Make a lesson video from your material |
-| `stickstudy course <files…> -d "…"` | Plan and make a series of videos (e.g. one per chapter) following your direction |
-| `stickstudy render <lesson>` | Render the video again (try another `--style`, `--vertical`, other music) without rewriting or re-voicing |
-| `stickstudy revoice <lesson> --voice openai` | Swap the voice engine, then render again |
-| `stickstudy frames <lesson>` | Save a still of every shot as a PNG (a quick check of the look) |
-| `stickstudy styles` | List the visual styles |
-| `stickstudy voices` | List the voice engines and the voices installed on your computer |
-| `stickstudy prompt` | Print the teaching instructions Claude follows |
+You review the plan, drop the videos you don't need, then let it build. Each video is ready to watch
+as soon as it's done. You don't have to wait for the whole set. The project page tracks what you've
+watched, your quiz scores and your next video. When you're done, a **review quiz** and a **review deck**
+pull together the questions and cards from every video.
 
-### Useful options
+## Practice after every video
 
-- `--style doodle|cosmic|whiteboard|chalk`: the visual style
-- `--vertical`: also render a 9:16 version for Shorts, TikTok and Reels (`--vertical-only` for just that one)
-- `--cast duo|solo`: a teacher and student bantering, or one narrator
-- `--focus "only the stuff on the midterm"`: steer what the lesson covers
-- `--scenes 5`: force the length (by default it scales with how much material there is)
-- `--model opus`: choose the Claude model that writes the script
-- `--music song.mp3`, `--music-db -16`, `--no-music`, `--no-sfx`
-- `--until 20`: render only the first 20 seconds (a quick preview)
-- `--teaching my_style.md`: replace the teaching instructions with your own
-  (`stickstudy prompt > my_style.md` gives you the default to start from)
+<p align="center">
+  <img src="docs/screenshots/flashcards.png" width="820" alt="A flashcard showing a key term and its definition" />
+</p>
 
-## Voices
+1. **Multiple choice.** When the video ends, the quiz opens. Answer by clicking or pressing 1–4. You see
+   right away whether you got it, plus a short explanation. Your best score is saved.
+2. **Flashcards.** Key terms first, then the study questions with model answers. Flip a card, then mark
+   it *Got it* or *Again*. "Again" cards come back later in the round, and at the end you can drill only
+   the ones you missed.
 
-Pick one with `--voice <engine>`. Give each character a voice with `--teacher-voice` and `--student-voice`.
+## Making a lesson
 
-| Engine | Cost | Sound | Setup |
-|---|---|---|---|
-| `auto` (default) | free | — | `omnivoice` when it's set up, otherwise `sapi` on Windows and `say` on macOS |
-| `omnivoice` | free | natural, **recommended** | local and offline; uses your GPU through Vulkan (AMD, NVIDIA or Intel) or the CPU. See below |
-| `sapi` | free | OK, robotic | none (Windows built-in) |
-| `say` | free | OK | none (macOS). Download "Premium" voices in System Settings → Accessibility → Spoken Content for better quality |
-| `piper` | free | natural | `pip install piper-tts` plus a `.onnx` voice from huggingface.co/rhasspy/piper-voices |
-| `openai` | ~1–3¢ per lesson | very natural, acted | `OPENAI_API_KEY=…` |
-| `elevenlabs` | free tier / paid | most expressive | `ELEVENLABS_API_KEY=…` |
-| `espeak` | free | retro robot | `espeak-ng` |
-| `none` | free | silent | captions only |
+<p align="center">
+  <img src="docs/screenshots/new-lesson.png" width="820" alt="The new lesson screen: attach material and describe what you need" />
+</p>
 
-### Setting up OmniVoice (recommended)
+1. Click **New lesson**.
+2. Attach your material: PDFs (scanned ones too), PowerPoint, lecture transcripts, notes or images.
+   Several files can go into one lesson.
+3. Type what you need, in your own words.
+4. Pick a project (several videos) or a single video, and choose the style, cast, voice, energy and
+   format. Your favorite settings can be saved as defaults.
+5. Press the arrow. Lazylearn shows each step as it happens: reading your material, writing the script,
+   recording voices, rendering. The video plays right in the app.
 
-OmniVoice is an open voice model. Lazylearn runs its small native server (`tts-server`, from
-[omnivoice.cpp](https://github.com/debpalash/VoiceStudio), the engine inside VoiceStudio). It needs no
-Python and no app. Make a folder like this:
+Everything lives in your own lessons folder: each lesson is a regular folder with an MP4 you can keep,
+share or watch anywhere.
 
-```
-omnivoice/
-  bin/     tts-server-<platform>[.exe] and its ggml libraries (in VoiceStudio's installer, under resources/bin)
-  models/  omnivoice-base-Q8_0.gguf + omnivoice-tokenizer-Q8_0.gguf
-           (from huggingface.co/Serveurperso/OmniVoice-GGUF, about 945 MB)
-```
+## Good to know
 
-Point `STICKSTUDY_OMNIVOICE_DIR` at it, or put it next to the `stickstudy` executable. Voices are
-**described** (`--teacher-voice "female, middle-aged, low pitch, british accent"`) or **cloned** from a
-`.wav` with its transcript in a `.txt` next to it. Each character's voice is made once and saved in the
-lesson's `voices/` folder, so it sounds the same on every line. The defaults are the gallery presets
-**The Champion** (teacher) and **The Neighbor** (student); any preset works by name (`stickstudy voices`).
+- Lazylearn runs on **Windows**, with **macOS** support planned.
+- The script is written by **Gemini** (default) or **Claude**, through tools you already have signed in on
+  your computer. Voices, animation and video are all made locally.
+- Your lessons, videos and quiz results stay on your computer, in your lessons folder.
+- All art is original. The characters, icons and styles are drawn by Lazylearn itself.
 
-Liveliness: `--energy calm|upbeat|hype` (default `upbeat`) sets how excited the voices sound, and
-`--pace 1.15` speeds every line up 15% without changing the pitch (works with any voice engine). It runs at about real-time speed on a
-mid-range GPU.
+## For developers
+
+Lazylearn is written in Rust. The desktop app is in `app/`, and the video engine plus a command-line tool
+(`stickstudy`) are in `src/`. See [docs/CLI.md](docs/CLI.md) for building from source and the command-line
+reference, and [CLAUDE.md](CLAUDE.md) for how everything fits together.
