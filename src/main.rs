@@ -28,7 +28,8 @@ struct VideoArgs {
     /// Only render the vertical version
     #[arg(long, conflicts_with = "vertical")]
     vertical_only: bool,
-    /// Background music file (mp3, wav, …). Default: a generated lo-fi loop
+    /// Background music: a file, or a folder to pick a random track from. Default: the folder in
+    /// STICKSTUDY_MUSIC_DIR if set, otherwise a generated lo-fi loop
     #[arg(long)]
     music: Option<PathBuf>,
     /// Music level under the voice in dB (more negative = quieter)

@@ -163,7 +163,7 @@ impl Quiz {
 
 /// Small random numbers without an extra crate: the std hasher is seeded randomly per process,
 /// mixed with a counter and the clock.
-fn random_u64() -> u64 {
+pub(crate) fn random_u64() -> u64 {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
     use std::sync::atomic::{AtomicU64, Ordering};

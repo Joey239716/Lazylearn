@@ -343,9 +343,39 @@ fn place(buf: &mut [f32], t: f32, x: &[f32], gain: f32) {
     }
 }
 
+const MUSIC_EXTS: &[&str] = &["mp3", "m4a", "aac", "ogg", "opus", "webm", "wav", "flac"];
+
+/// The background track for one video. `music` can be a file or a folder (a random track from
+/// it each time); with no `music`, the folder in STICKSTUDY_MUSIC_DIR is used if set. None means
+/// the generated lo-fi loop.
+pub fn pick_music(music: Option<&Path>) -> Option<std::path::PathBuf> {
+    let p = match music {
+        Some(p) => p.to_path_buf(),
+        None => std::path::PathBuf::from(std::env::var_os("STICKSTUDY_MUSIC_DIR")?),
+    };
+    if !p.is_dir() {
+        return p.is_file().then_some(p);
+    }
+    let mut tracks: Vec<_> = std::fs::read_dir(&p)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|f| {
+            f.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| MUSIC_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+        })
+        .collect();
+    if tracks.is_empty() {
+        return None;
+    }
+    tracks.sort();
+    let i = (crate::lesson::random_u64() % tracks.len() as u64) as usize;
+    Some(tracks.swap_remove(i))
+}
+
 pub struct MixOptions<'a> {
     pub ffmpeg: &'a str,
-    /// None = generated lo-fi loop; Some(path) = your own track
+    /// A track or a folder of tracks (see `pick_music`); None = STICKSTUDY_MUSIC_DIR or the lo-fi loop
     pub music: Option<&'a Path>,
     pub no_music: bool,
     pub no_sfx: bool,
@@ -388,14 +418,22 @@ pub fn mix(tl: &Timeline, o: &MixOptions) -> Result<Vec<f32>> {
         }
     }
     if !o.no_music {
-        let music = match o.music {
+        let track = pick_music(o.music);
+        let music = match &track {
             Some(p) => {
                 let m = decode(o.ffmpeg, p)?;
                 if m.is_empty() {
                     lofi(n)
                 } else {
-                    // loop the track to length with a short crossfade
+                    // a long track starts somewhere random, so videos sharing it sound different;
+                    // a short one loops to length
+                    let start = if m.len() > n + 10 * SR as usize {
+                        (crate::lesson::random_u64() % (m.len() - n) as u64) as usize
+                    } else {
+                        0
+                    };
                     let mut v = Vec::with_capacity(n);
+                    v.extend_from_slice(&m[start..(start + n).min(m.len())]);
                     while v.len() < n {
                         v.extend_from_slice(&m[..m.len().min(n - v.len())]);
                     }
