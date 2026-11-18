@@ -280,6 +280,7 @@ impl LazyApp {
         let backfilled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         backfill(&projects, backfilled.clone());
         let start_tab = if projects.iter().any(|p| p.is_course()) { Tab::Projects } else { Tab::Videos };
+        #[allow(unused_mut)] // only changed by debug-build hooks
         let mut this = LazyApp {
             settings,
             projects,
