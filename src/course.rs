@@ -41,6 +41,10 @@ pub struct PlannedVideo {
     /// Target length in minutes of speech
     #[serde(default)]
     pub minutes: f32,
+    /// Also write a study set: quiz.json (multiple choice) + flashcards.json, for the
+    /// key terms and study questions of this part
+    #[serde(default)]
+    pub study: bool,
 }
 
 impl PlannedVideo {
@@ -96,7 +100,7 @@ fn schema() -> Value {
         "type": "object",
         "properties": {
             "title": { "type": "string" },
-            "recipe": { "type": "string", "enum": ["overview", "terms", "questions", "cram"] },
+            "recipe": { "type": "string", "enum": ["overview", "terms", "questions", "cram", "chapter"] },
             "covers": { "type": "string" },
             "start": { "type": "string" },
             "end": { "type": "string" },
@@ -225,6 +229,7 @@ mod tests {
             end: end.into(),
             focus: String::new(),
             minutes: 5.0,
+            study: false,
         }
     }
 

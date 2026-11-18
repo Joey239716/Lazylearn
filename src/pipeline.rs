@@ -233,6 +233,23 @@ pub fn write_script(
     Ok(lesson)
 }
 
+/// Practice for after the video: multiple choice (quiz.json) then flashcards (flashcards.json).
+pub fn write_study_set(
+    dir: &Path,
+    title: &str,
+    material: &str,
+    focus: &str,
+    provider: script::Provider,
+    model: Option<&str>,
+    p: &Progress,
+) -> Result<()> {
+    p.info("Writing the study set: multiple choice + flashcards…");
+    let set = crate::study::make(title, material, focus, provider, model)?;
+    set.save(dir)?;
+    p.info(format!("Study set: {} multiple-choice questions, {} flashcards", set.questions.len(), set.cards.len()));
+    Ok(())
+}
+
 /// Step 2: the voices.
 pub fn record_voices(lesson: &mut Lesson, dir: &Path, voice: &tts::Voice, p: &Progress) -> Result<()> {
     p.start(Stage::Voices, format!("Recording voices: {}", voice.describe()));
@@ -317,6 +334,7 @@ pub fn build_course(dir: &Path, o: &CourseOptions, only: &[usize], p: &Progress)
         material: String,
         opts: script::ScriptOptions,
         info: LessonInfo,
+        study: bool,
     }
     let mut jobs = vec![];
     let mut made = vec![];
@@ -361,7 +379,7 @@ pub fn build_course(dir: &Path, o: &CourseOptions, only: &[usize], p: &Progress)
             provider: o.provider,
             recipe: v.recipe,
         };
-        jobs.push(Job { i, title: v.title.clone(), dir: vdir, material: format!("{part}\n{visuals}"), opts, info });
+        jobs.push(Job { i, title: v.title.clone(), dir: vdir, material: format!("{part}\n{visuals}"), opts, info, study: v.study });
     }
     if jobs.is_empty() {
         made.sort();
@@ -381,6 +399,9 @@ pub fn build_course(dir: &Path, o: &CourseOptions, only: &[usize], p: &Progress)
                 std::fs::write(j.dir.join("material.txt"), &j.material)?;
                 j.info.save(&j.dir)?;
                 let lesson = write_script(&j.material, &j.dir, &j.opts, &o.video, &mut j.info, &tag(j.i))?;
+                if j.study {
+                    write_study_set(&j.dir, &j.title, &j.material, j.opts.focus.as_deref().unwrap_or(""), o.provider, o.model.as_deref(), &tag(j.i))?;
+                }
                 if to_voices.send((j.i, j.dir, lesson)).is_err() {
                     break; // a later step failed; its error is reported
                 }

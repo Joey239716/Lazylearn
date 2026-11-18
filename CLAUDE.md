@@ -126,6 +126,13 @@ records voices (GPU) and N+2's script is written (network); a course takes about
 `Progress::tagged("i/N")` (messages prefixed `[i/N] `, shared cancel). Single lessons use `produce`
 (= `write_script` → `record_voices` → `render_videos`). Recipes (`script::Recipe`: overview,
 terms, questions, cram) add a VIDEO FORMAT section to the script prompt; `make --recipe` uses them for one video.
+**One video per chapter + practice (the user's preferred format, 2026-11-17):** recipe `chapter` teaches the
+whole chapter in order, explains every key term as it comes up and covers everything the study questions ask
+about; the key terms and study questions are practised AFTER the video as a **study set** (`study.rs`,
+`PlannedVideo.study = true`, or `stickstudy study <lesson dir>`): `quiz.json` (multiple choice: one per key
+term + 2-3 per study question) first, then `flashcards.json` (`{title, cards:[{front, back, kind: term|question}]}`;
+question cards carry a model answer). Written in the script stage of the course pipeline. `script::ask_json`
+sends any structured request to the configured provider.
 The visual notes (`pipeline::VISUALS_HEADER` section) are whole-document, so they're appended to every slice.
 App: the New-lesson composer's text box should be the course **direction**; show the plan for confirmation.
 

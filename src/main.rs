@@ -128,6 +128,17 @@ enum Cmd {
         #[command(flatten)]
         video: VideoArgs,
     },
+    /// Write a study set for a lesson folder: multiple choice (quiz.json) then flashcards (flashcards.json)
+    Study {
+        dir: PathBuf,
+        #[arg(long, value_enum, default_value_t = script::Provider::Gemini)]
+        provider: script::Provider,
+        #[arg(long)]
+        model: Option<String>,
+        /// What to cover (default: the lesson's focus from info.json)
+        #[arg(long)]
+        focus: Option<String>,
+    },
     /// Re-render the video of an existing lesson (e.g. in a different style)
     Render {
         dir: PathBuf,
@@ -243,6 +254,13 @@ fn run() -> Result<()> {
             for d in &made {
                 eprintln!("   {}", d.join("video.mp4").display());
             }
+        }
+        Cmd::Study { dir, provider, model, focus } => {
+            let material = std::fs::read_to_string(dir.join("material.txt")).context("the lesson folder has no material.txt")?;
+            let info = pipeline::LessonInfo::load(&dir).unwrap_or_default();
+            let focus = focus.or(info.focus.clone()).unwrap_or_else(|| "The key terms and study questions in this material.".into());
+            let title = if info.title.is_empty() { "Study set".to_string() } else { info.title.clone() };
+            pipeline::write_study_set(&dir, &title, &material, &focus, provider, model.as_deref(), &Progress::cli())?;
         }
         Cmd::Render { dir, video } => {
             let mut lesson = Lesson::load(&dir)?;

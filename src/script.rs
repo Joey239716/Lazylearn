@@ -42,6 +42,9 @@ pub enum Recipe {
     Questions,
     /// Exam cram: only what is most likely to be tested, fast
     Cram,
+    /// One video for a whole chapter: the story in order, every key term explained, and everything
+    /// needed to answer the study questions (practice comes afterwards as quiz + flashcards)
+    Chapter,
 }
 
 impl Recipe {
@@ -51,6 +54,7 @@ impl Recipe {
             Recipe::Terms => "terms",
             Recipe::Questions => "questions",
             Recipe::Cram => "cram",
+            Recipe::Chapter => "chapter",
         }
     }
     pub fn prompt(self) -> &'static str {
@@ -59,6 +63,7 @@ impl Recipe {
             Recipe::Terms => "VIDEO FORMAT: TERM DRILL. Cover every key term, concept and name in this material that a student could be asked to define. For each term: say it, give the exact exam-ready definition (a definition shot), a quick everyday example or analogy, and a memory hook. Group related terms into scenes of 3-6 terms; use compare shots for terms that are easy to confuse and mnemonic shots where an acronym helps. Every scene gets a quiz testing definitions. The final scene is a rapid-fire recap of all the terms (recap shot).",
             Recipe::Questions => "VIDEO FORMAT: HOW TO ANSWER THE QUESTIONS. Teach the viewer how to answer the review, discussion or end-of-chapter questions for this material. If the material contains such questions, go through them in order (the most representative ones if there are many), one per scene: show the question (question shot), unpack what it is really asking, list the key points a strong answer must include (list or flow shots), give a model answer with a clear structure (main claim, evidence or example from the reading, explanation), and name the most common mistake. If the material has no questions, write the 3-6 questions an instructor would most likely ask and answer those. Quizzes test what a good answer must contain.",
             Recipe::Cram => "VIDEO FORMAT: EXAM CRAM. Only what is most likely to be tested, as fast and dense as possible: key definitions, facts, formulas, processes and classic traps, with mnemonics. No long intuition-building. Quizzes on every scene.",
+            Recipe::Chapter => "VIDEO FORMAT: THE WHOLE CHAPTER IN ONE VIDEO. Teach the chapter's story in order, from its big picture to its details, so the viewer could explain it to a friend. As each KEY TERM in the notes comes up (the book's key-term list AND the 'also worth knowing' items), explain it on screen with a definition shot: who or what, when, where, and why it matters. Make sure the viewer learns everything needed to answer EVERY study question in the notes: the causes, comparisons, turning points, named people, dates and examples those questions ask about, woven into the story (you may name the big question a section answers, but don't turn the video into a question-by-question walkthrough). Link the chapter to the ones before and after it. Use 8-14 scenes. The student practises the terms and questions afterwards with a quiz and flashcards, so keep in-video quizzes light.",
         }
     }
 }
@@ -301,6 +306,19 @@ fn claude_bin() -> String {
 }
 
 fn ask_claude(prompt: &str, schema: &str, model: Option<&str>) -> Result<Lesson> {
+    let v = ask_claude_value(prompt, schema, model, "You are an award-winning educational scriptwriter and animation director. You output only valid JSON.")?;
+    serde_json::from_value(v).context("claude's JSON didn't match the lesson format")
+}
+
+/// Any structured request through the configured provider (Claude CLI or Gemini).
+pub fn ask_json(provider: Provider, prompt: &str, schema: &Value, model: Option<&str>) -> Result<Value> {
+    match provider {
+        Provider::Claude => ask_claude_value(prompt, &schema.to_string(), model, "You are an expert university tutor. You output only valid JSON."),
+        Provider::Gemini => crate::gemini::ask_json(prompt, schema, model),
+    }
+}
+
+fn ask_claude_value(prompt: &str, schema: &str, model: Option<&str>, system: &str) -> Result<Value> {
     let mut cmd = crate::command(claude_bin());
     cmd.args([
         "-p",
@@ -312,7 +330,7 @@ fn ask_claude(prompt: &str, schema: &str, model: Option<&str>) -> Result<Lesson>
         "--json-schema",
         schema,
         "--system-prompt",
-        "You are an award-winning educational scriptwriter and animation director. You output only valid JSON.",
+        system,
     ]);
     // Sonnet writes great scripts and is much lighter on usage limits than the largest model.
     cmd.args(["--model", model.unwrap_or("sonnet")]);
@@ -343,7 +361,7 @@ fn ask_claude(prompt: &str, schema: &str, model: Option<&str>) -> Result<Lesson>
     if v.get("is_error").and_then(Value::as_bool) == Some(true) {
         bail!("claude reported an error: {}", v.get("result").cloned().unwrap_or_default());
     }
-    let lesson_val = match v.get("structured_output") {
+    let val = match v.get("structured_output") {
         Some(s) if s.is_object() => s.clone(),
         _ => {
             let text = v
@@ -354,7 +372,7 @@ fn ask_claude(prompt: &str, schema: &str, model: Option<&str>) -> Result<Lesson>
                 .with_context(|| format!("claude didn't return valid JSON: {}", preview(text)))?
         }
     };
-    serde_json::from_value(lesson_val).context("claude's JSON didn't match the lesson format")
+    Ok(val)
 }
 
 /// Grab the outermost {...} in case the model wrapped JSON in prose or code fences.

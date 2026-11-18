@@ -11,6 +11,7 @@ pub mod omnivoice;
 pub mod render;
 pub mod script;
 pub mod shots;
+pub mod study;
 pub mod styles;
 pub mod timeline;
 pub mod tts;
