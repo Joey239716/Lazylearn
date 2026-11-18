@@ -74,7 +74,7 @@ WRITE TWO THINGS
 1. "questions": multiple-choice questions, in this order:
    - one for EVERY key term in the material's key-term list and "also worth knowing" list (if the material has such lists; otherwise the 15-25 most testable terms). Test who or what it is, when, where, or why it matters, not trivia.
    - then 2-3 for EACH study / review / end-of-chapter question, each testing a key fact, cause, comparison or example a strong answer needs.
-   4 choices each, plausible wrong answers, vary which position is correct. answer_index is 0-based. explanation: 1-2 sentences with the named people, dates or examples that make the answer right.
+   4 choices each, plausible wrong answers (the choices are shuffled afterwards). answer_index is 0-based. explanation: 1-2 sentences with the named people, dates or examples that make the answer right.
 
 2. "cards": flashcards, in this order:
    - one per key term (kind "term"): front = the term; back = 1-3 sentences: who or what, when, where, and why it matters (add the page number if the material gives one).
@@ -95,6 +95,9 @@ MATERIAL
     }))
     .context("the study set didn't match the expected format")?;
     set.questions.retain(|q| q.choices.len() >= 2 && q.answer_index < q.choices.len() && !q.question.trim().is_empty());
+    for q in &mut set.questions {
+        q.shuffle();
+    }
     set.cards.retain(|c| !c.front.trim().is_empty() && !c.back.trim().is_empty());
     if set.questions.is_empty() && set.cards.is_empty() {
         anyhow::bail!("the study set came back empty");

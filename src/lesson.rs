@@ -144,6 +144,36 @@ pub struct Quiz {
     pub explanation: String,
 }
 
+impl Quiz {
+    /// Put the choices in a random order (AI writers favour one position for the right answer,
+    /// so the order is never left to them). Keeps `answer_index` pointing at the right choice.
+    pub fn shuffle(&mut self) {
+        let n = self.choices.len();
+        if n < 2 || self.answer_index >= n {
+            return;
+        }
+        let right = self.choices[self.answer_index].clone();
+        for i in (1..n).rev() {
+            let j = (random_u64() % (i as u64 + 1)) as usize;
+            self.choices.swap(i, j);
+        }
+        self.answer_index = self.choices.iter().position(|c| *c == right).unwrap_or(0);
+    }
+}
+
+/// Small random numbers without an extra crate: the std hasher is seeded randomly per process,
+/// mixed with a counter and the clock.
+fn random_u64() -> u64 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut h = RandomState::new().build_hasher();
+    h.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
+    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    h.finish()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scene {
     pub heading: String,
@@ -212,9 +242,11 @@ impl Lesson {
                     }
                 }
             }
-            if let Some(q) = &scene.quiz {
+            if let Some(q) = &mut scene.quiz {
                 if q.choices.len() < 2 || q.answer_index >= q.choices.len() {
                     scene.quiz = None;
+                } else {
+                    q.shuffle();
                 }
             }
         }
@@ -227,5 +259,27 @@ impl Lesson {
 
     pub fn quizzes(&self) -> Vec<&Quiz> {
         self.scenes.iter().filter_map(|s| s.quiz.as_ref()).collect()
+    }
+}
+
+#[cfg(test)]
+mod shuffle_tests {
+    use super::Quiz;
+
+    #[test]
+    fn shuffle_keeps_the_right_answer_and_spreads_it() {
+        let mut seen = [0usize; 4];
+        for _ in 0..400 {
+            let mut q = Quiz {
+                question: "q".into(),
+                choices: vec!["a".into(), "right".into(), "c".into(), "d".into()],
+                answer_index: 1,
+                explanation: String::new(),
+            };
+            q.shuffle();
+            assert_eq!(q.choices[q.answer_index], "right");
+            seen[q.answer_index] += 1;
+        }
+        assert!(seen.iter().all(|&n| n > 50), "{seen:?}");
     }
 }
