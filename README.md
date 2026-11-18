@@ -107,4 +107,4 @@ share or watch anywhere.
 
 Lazylearn is written in Rust. The desktop app is in `app/`, and the video engine plus a command-line tool
 (`stickstudy`) are in `src/`. See [docs/CLI.md](docs/CLI.md) for building from source and the command-line
-reference, and [CLAUDE.md](CLAUDE.md) for how everything fits together.
+reference.

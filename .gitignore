@@ -25,3 +25,7 @@
 .render/
 quiz_results.json
 flashcard_results.json
+
+# Local notes for AI coding assistants (machine-specific; not published)
+CLAUDE.md
+AGENTS.md
