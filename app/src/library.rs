@@ -25,6 +25,9 @@ pub struct Project {
     pub parent: Option<PathBuf>,
     /// watched to the end at least once (`.watched`)
     pub watched: bool,
+    /// flashcards in flashcards.json (summed over a project's videos)
+    pub card_count: usize,
+    pub cards: Option<CardResult>,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +103,8 @@ impl Project {
             course: None,
             parent: None,
             watched: dir.join(".watched").exists(),
+            card_count: load_cards(dir).len(),
+            cards: CardResult::load(dir),
         })
     }
 
@@ -139,6 +144,8 @@ impl Project {
             course: Some(Course { plan, videos }),
             parent: None,
             watched: false,
+            card_count: children.iter().map(|c| c.card_count).sum(),
+            cards: CardResult::load(dir),
         };
         Some((me, children))
     }
@@ -234,5 +241,58 @@ pub fn ago(t: u64) -> String {
         3600..=86_399 => format!("{}h ago", d / 3600),
         86_400..=172_799 => "yesterday".into(),
         _ => format!("{}d ago", d / 86_400),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CardFile {
+    #[serde(default)]
+    cards: Vec<stickstudy::study::Card>,
+}
+
+/// A lesson's flashcards (terms first, then questions); for a project, every video's deck in order.
+pub fn load_cards(dir: &Path) -> Vec<stickstudy::study::Card> {
+    if is_course(dir) {
+        let mut all: Vec<stickstudy::study::Card> = stickstudy::course::Plan::load(dir)
+            .map(|p| p.videos.iter().enumerate().flat_map(|(i, v)| load_cards(&dir.join(v.folder(i)))).collect())
+            .unwrap_or_default();
+        all.sort_by_key(|c| c.kind == "question");
+        return all;
+    }
+    let mut cards = std::fs::read_to_string(dir.join("flashcards.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<CardFile>(&s).ok())
+        .map(|f| f.cards)
+        .unwrap_or_default();
+    cards.retain(|c| !c.front.trim().is_empty());
+    cards.sort_by_key(|c| c.kind == "question"); // stable: terms first, then questions
+    cards
+}
+
+/// `flashcard_results.json`: how a round went (known on the first try) and the best round.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CardResult {
+    pub known: usize,
+    pub total: usize,
+    #[serde(default)]
+    pub best: usize,
+    #[serde(default)]
+    pub rounds: u32,
+    #[serde(default)]
+    pub taken: u64,
+}
+
+impl CardResult {
+    pub fn load(dir: &Path) -> Option<CardResult> {
+        serde_json::from_str(&std::fs::read_to_string(dir.join("flashcard_results.json")).ok()?).ok()
+    }
+
+    pub fn record(dir: &Path, known: usize, total: usize) -> CardResult {
+        let prev = CardResult::load(dir).filter(|p| p.total == total).unwrap_or_default();
+        let r = CardResult { known, total, best: prev.best.max(known), rounds: prev.rounds + 1, taken: stickstudy::pipeline::now_secs() };
+        if let Ok(s) = serde_json::to_string_pretty(&r) {
+            let _ = std::fs::write(dir.join("flashcard_results.json"), s);
+        }
+        r
     }
 }

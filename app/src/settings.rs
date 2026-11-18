@@ -83,6 +83,10 @@ impl Settings {
     }
 
     pub fn save(&self) {
+        // dev runs against another lessons folder must not overwrite the real settings
+        if cfg!(debug_assertions) && std::env::var_os("LAZYLEARN_LESSONS").is_some() {
+            return;
+        }
         let p = Self::path();
         if let Some(d) = p.parent() {
             let _ = std::fs::create_dir_all(d);

@@ -108,7 +108,14 @@ fn apply_theme(cx: &mut App) {
 }
 
 fn main() {
-    let settings = settings::Settings::load();
+    #[allow(unused_mut)]
+    let mut settings = settings::Settings::load();
+    // dev: test against another lessons folder, in a window that doesn't take the screen
+    #[cfg(debug_assertions)]
+    if let Some(d) = std::env::var_os("LAZYLEARN_LESSONS") {
+        settings.lessons_dir = d.into();
+    }
+    let offscreen = cfg!(debug_assertions) && std::env::var_os("LAZYLEARN_OFFSCREEN").is_some();
     settings.apply_env();
     gpui_kit::application().with_assets(Assets).run(move |cx| {
         gpui_kit::init(cx);
@@ -121,15 +128,23 @@ fn main() {
             }
         })
         .detach();
-        let bounds = Bounds::centered(None, size(px(1280.), px(840.)), cx);
+        let mut bounds = Bounds::centered(None, size(px(1280.), px(840.)), cx);
+        if offscreen {
+            bounds.origin = gpui::point(px(-3000.), px(40.));
+        }
         let opts = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(880.), px(580.))),
             app_id: Some("lazylearn".into()),
+            // dev screenshots: don't pop up over whatever the user is doing
+            focus: !offscreen,
+
             ..TitleBar::window_options()
         };
         gpui_kit::open_window(opts, cx, move |window, cx| cx.new(|cx| app::LazyApp::new(settings.clone(), window, cx)))
             .expect("opening the Lazylearn window");
-        cx.activate(true);
+        if !offscreen {
+            cx.activate(true);
+        }
     });
 }

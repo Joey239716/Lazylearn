@@ -95,6 +95,51 @@ impl Draft {
     }
 }
 
+/// A flashcard round: a queue of card indexes; "Again" puts a card back a few places later.
+struct CardRun {
+    dir: PathBuf,
+    deck: Vec<stickstudy::study::Card>,
+    queue: std::collections::VecDeque<usize>,
+    flipped: bool,
+    /// cards that needed "Again" at least once this round
+    missed: std::collections::BTreeSet<usize>,
+    got: usize,
+    result: Option<library::CardResult>,
+    /// practising only the missed ones (not recorded as a full round)
+    retry: bool,
+}
+
+impl CardRun {
+    fn new(dir: PathBuf, deck: Vec<stickstudy::study::Card>, only: Option<Vec<usize>>) -> CardRun {
+        let retry = only.is_some();
+        let queue = only.unwrap_or_else(|| (0..deck.len()).collect()).into_iter().collect();
+        CardRun { dir, deck, queue, flipped: false, missed: Default::default(), got: 0, result: None, retry }
+    }
+    fn total(&self) -> usize {
+        self.got + self.queue.len()
+    }
+    fn answer(&mut self, knew: bool) {
+        let Some(i) = self.queue.pop_front() else { return };
+        self.flipped = false;
+        if knew {
+            self.got += 1;
+        } else {
+            self.missed.insert(i);
+            let at = self.queue.len().min(4);
+            self.queue.insert(at, i);
+        }
+        if self.queue.is_empty() && self.result.is_none() {
+            let total = self.got;
+            let known = total - self.missed.len().min(total);
+            self.result = Some(if self.retry {
+                library::CardResult { known, total, ..Default::default() }
+            } else {
+                library::CardResult::record(&self.dir, known, total)
+            });
+        }
+    }
+}
+
 struct QuizRun {
     dir: PathBuf,
     questions: Vec<Quiz>,
@@ -125,6 +170,7 @@ pub struct LazyApp {
     player: Option<Player>,
     player_vertical: bool,
     quiz: Option<QuizRun>,
+    cards: Option<CardRun>,
     theater: bool,
     scrub: Option<f32>,
     seek_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -249,6 +295,7 @@ impl LazyApp {
             player: None,
             player_vertical: false,
             quiz: None,
+            cards: None,
             theater: false,
             scrub: None,
             seek_bounds: Rc::new(Cell::new(Bounds::default())),
@@ -309,6 +356,16 @@ impl LazyApp {
                 self.start_quiz(d);
                 if let Some(n) = env("LAZYLEARN_PICK") {
                     self.quiz_pick(n.parse::<usize>().unwrap_or(1).saturating_sub(1));
+                }
+            }
+        }
+        if env("LAZYLEARN_CARDS").is_some() {
+            if let Page::Project(d) = self.page.clone() {
+                self.start_cards(d, None);
+                if env("LAZYLEARN_FLIP").is_some() {
+                    if let Some(r) = &mut self.cards {
+                        r.flipped = true;
+                    }
                 }
             }
         }
@@ -391,6 +448,7 @@ impl LazyApp {
             p.release(window);
         }
         self.quiz = None;
+        self.cards = None;
         self.theater = false;
         self.menu = None;
         self.scrub = None;
@@ -688,6 +746,22 @@ impl LazyApp {
         self.quiz = Some(QuizRun { dir, questions, idx: 0, picked: None, score: 0, result: None });
     }
 
+    fn start_cards(&mut self, dir: PathBuf, only: Option<Vec<usize>>) {
+        let deck = library::load_cards(&dir);
+        if deck.is_empty() {
+            self.toast("This lesson has no flashcards");
+            return;
+        }
+        if let Some(p) = &mut self.player {
+            if p.playing {
+                p.pause();
+            }
+        }
+        self.quiz = None;
+        self.cards = Some(CardRun::new(dir, deck, only));
+        self.page_scroll.scroll_to_bottom();
+    }
+
     fn quiz_pick(&mut self, i: usize) {
         let Some(q) = &mut self.quiz else { return };
         if q.result.is_some() || q.picked.is_some() || i >= q.questions[q.idx].choices.len() {
@@ -716,6 +790,18 @@ impl LazyApp {
         }
     }
 
+    /// After a round ends, show the new best in the sidebar/project without a rescan.
+    fn refresh_card_result(&mut self) {
+        if let Some(r) = &self.cards {
+            if r.result.is_some() && !r.retry {
+                let dir = r.dir.clone();
+                if let Some(p) = self.projects.iter_mut().find(|p| p.dir == dir) {
+                    p.cards = library::CardResult::load(&dir);
+                }
+            }
+        }
+    }
+
     fn set_theater(&mut self, on: bool, window: &mut Window) {
         if self.theater != on {
             self.theater = on;
@@ -740,6 +826,34 @@ impl LazyApp {
         }
         if !matches!(self.page, Page::Project(_)) || !self.focus.is_focused(window) {
             return;
+        }
+        if let Some(r) = &mut self.cards {
+            if r.result.is_none() {
+                match k {
+                    "space" | "enter" | "up" | "down" => {
+                        r.flipped = !r.flipped;
+                        cx.notify();
+                        return;
+                    }
+                    "1" | "left" if r.flipped => {
+                        r.answer(false);
+                        cx.notify();
+                        return;
+                    }
+                    "2" | "right" if r.flipped => {
+                        r.answer(true);
+                        self.refresh_card_result();
+                        cx.notify();
+                        return;
+                    }
+                    "escape" => {
+                        self.cards = None;
+                        cx.notify();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
         }
         if let Some(q) = &self.quiz {
             if q.result.is_none() {
@@ -1899,6 +2013,9 @@ impl LazyApp {
             if p.question_count > 0 {
                 meta.push(format!("{} quiz questions", p.question_count));
             }
+            if p.card_count > 0 {
+                meta.push(format!("{} flashcards", p.card_count));
+            }
         }
         let has_video = proj.as_ref().map(|p| p.video.is_some() || p.vertical_video.is_some()).unwrap_or(false);
         let has_lesson = dir.join("lesson.json").is_file();
@@ -2141,7 +2258,7 @@ impl LazyApp {
                                 })),
                         )
                     })
-                    .when(has_video && !running, |d| d.child(self.render_quiz(dir, cx)))
+                    .when(has_video && !running, |d| d.child(self.render_practice(dir, cx)))
                     .when_some(next, |d, (ndir, ntitle)| {
                         d.child(
                             div()
@@ -2603,7 +2720,7 @@ impl LazyApp {
                     })
                     .when(made > 0, |d| d.child(self.render_project_progress(dir, course.as_ref(), cx)))
                     .children(plan_card)
-                    .when(made > 0 && !building, |d| d.child(self.render_quiz(dir, cx)))
+                    .when(made > 0 && !building, |d| d.child(self.render_practice(dir, cx)))
                     .when_some(build_err, |d, e| {
                         d.child(
                             div()
@@ -3070,6 +3187,8 @@ impl LazyApp {
         };
 
         let total = q.questions.len();
+        let card_count = self.projects.iter().find(|p| p.dir == dir).map(|p| p.card_count).unwrap_or(0);
+        let has_cards = card_count > 0;
         if let Some(r) = &q.result {
             let pct = r.score as f32 / r.total.max(1) as f32;
             let (headline, color) = if pct >= 0.999 {
@@ -3102,11 +3221,27 @@ impl LazyApp {
                             window.focus(&this.focus, cx);
                             cx.notify();
                         })))
-                        .child(pill_btn("retake", "Retake quiz").on_click(cx.listener(move |this, _, window, cx| {
-                            this.start_quiz(d.clone());
-                            window.focus(&this.focus, cx);
-                            cx.notify();
-                        }))),
+                        .map(|row| {
+                            let d2 = d.clone();
+                            if has_cards {
+                                row.child(ghost_btn("retake", "rotate-ccw", "Retake quiz").on_click(cx.listener(move |this, _, window, cx| {
+                                    this.start_quiz(d.clone());
+                                    window.focus(&this.focus, cx);
+                                    cx.notify();
+                                })))
+                                .child(pill_btn("to-cards", format!("Flashcards ({card_count})")).on_click(cx.listener(move |this, _, window, cx| {
+                                    this.start_cards(d2.clone(), None);
+                                    window.focus(&this.focus, cx);
+                                    cx.notify();
+                                })))
+                            } else {
+                                row.child(pill_btn("retake", "Retake quiz").on_click(cx.listener(move |this, _, window, cx| {
+                                    this.start_quiz(d.clone());
+                                    window.focus(&this.focus, cx);
+                                    cx.notify();
+                                })))
+                            }
+                        }),
                 )
                 .into_any_element();
         }
@@ -3216,6 +3351,278 @@ impl LazyApp {
             .when(picked.is_none(), |d| {
                 d.child(div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(faint()).child("Click an answer or press").child(kbd("1")).child("–").child(kbd(format!("{}", qq.choices.len().min(4)))))
             })
+            .into_any_element()
+    }
+
+    /// Multiple choice first, then flashcards: whichever is running, else both invitations.
+    fn render_practice(&self, dir: &Path, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.cards.as_ref().map(|r| r.dir == dir).unwrap_or(false) {
+            return self.render_cards(cx).into_any_element();
+        }
+        let quiz_running = self.quiz.as_ref().map(|q| q.dir == dir).unwrap_or(false);
+        let proj = self.projects.iter().find(|p| p.dir == dir);
+        let n = proj.map(|p| p.card_count).unwrap_or(0);
+        let best = proj.and_then(|p| p.cards.clone());
+        let is_project = proj.map(|p| p.is_course()).unwrap_or(false);
+        let d = dir.to_path_buf();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(self.render_quiz(dir, cx))
+            .when(n > 0 && !quiz_running, |col| {
+                col.child(
+                    div()
+                        .w_full()
+                        .rounded(px(14.))
+                        .border_1()
+                        .border_color(border())
+                        .bg(surface())
+                        .p(px(22.))
+                        .flex()
+                        .items_center()
+                        .gap(px(16.))
+                        .child(
+                            div()
+                                .size(px(40.))
+                                .rounded(px(10.))
+                                .bg(ca(0x8b7cf6, 0.14))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(theme::icon("book-open").size(px(19.)).text_color(violet())),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.))
+                                .child(div().text_size(px(15.)).font_weight(FontWeight::MEDIUM).child(if is_project { "Review flashcards" } else { "Flashcards" }))
+                                .child(div().text_size(px(13.)).text_color(muted()).child(match &best {
+                                    Some(b) => format!("{n} cards · best round {}/{} on the first try · {} round{}", b.best, b.total, b.rounds, if b.rounds == 1 { "" } else { "s" }),
+                                    None => format!("{n} cards: key terms first, then the study questions with model answers."),
+                                })),
+                        )
+                        .child(pill_btn("start-cards", if best.is_some() { "Practise again" } else { "Start" }).on_click(cx.listener(move |this, _, window, cx| {
+                            this.start_cards(d.clone(), None);
+                            window.focus(&this.focus, cx);
+                            cx.notify();
+                        }))),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_cards(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let r = self.cards.as_ref().unwrap();
+        let shell = div().w_full().rounded(px(14.)).border_1().border_color(border()).bg(surface()).p(px(22.)).flex().flex_col();
+        if let Some(res) = &r.result {
+            let missed: Vec<usize> = r.missed.iter().copied().collect();
+            let n_missed = missed.len();
+            let d = r.dir.clone();
+            let d2 = r.dir.clone();
+            let perfect = res.known >= res.total;
+            return shell
+                .items_center()
+                .gap(px(10.))
+                .py(px(30.))
+                .child(theme::icon(if perfect { "trophy" } else { "book-open" }).size(px(28.)).text_color(if perfect { green() } else { violet() }))
+                .child(div().text_size(px(40.)).font_weight(FontWeight::SEMIBOLD).child(format!("{}/{}", res.known, res.total)))
+                .child(div().text_size(px(15.)).text_color(muted()).child(if r.retry {
+                    "Missed cards practised".to_string()
+                } else if perfect {
+                    "Every card on the first try!".to_string()
+                } else {
+                    "known on the first try".to_string()
+                }))
+                .when(!r.retry && res.rounds > 0, |d| {
+                    d.child(div().text_size(px(12.)).text_color(faint()).child(format!("Best {}/{} · round {}", res.best, res.total, res.rounds)))
+                })
+                .child(
+                    div()
+                        .pt(px(10.))
+                        .flex()
+                        .gap(px(8.))
+                        .child(ghost_btn("cards-again", "rotate-ccw", "Whole deck again").on_click(cx.listener(move |this, _, window, cx| {
+                            this.start_cards(d.clone(), None);
+                            window.focus(&this.focus, cx);
+                            cx.notify();
+                        })))
+                        .when(n_missed > 0, |row| {
+                            row.child(pill_btn("cards-missed", format!("Practise the {n_missed} I missed")).on_click(cx.listener(move |this, _, window, cx| {
+                                this.start_cards(d2.clone(), Some(missed.clone()));
+                                window.focus(&this.focus, cx);
+                                cx.notify();
+                            })))
+                        })
+                        .child(ghost_btn("cards-close", "x", "Close").on_click(cx.listener(|this, _, _, cx| {
+                            this.cards = None;
+                            cx.notify();
+                        }))),
+                )
+                .into_any_element();
+        }
+        let Some(&i) = r.queue.front() else { return shell.into_any_element() };
+        let card = &r.deck[i];
+        let is_q = card.kind == "question";
+        let total = r.total();
+        let again = r.missed.contains(&i);
+        let face = div()
+            .id("flashcard")
+            .min_h(px(280.))
+            .rounded(px(14.))
+            .border_1()
+            .border_color(if r.flipped { ca(0x8b7cf6, 0.45) } else { border2() })
+            .bg(if r.flipped { c(0x1b1a24) } else { bg() })
+            .px(px(32.))
+            .py(px(26.))
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .cursor_pointer()
+            .hover(|s| s.border_color(c(0x3a3b42)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .px(px(8.))
+                            .h(px(22.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(6.))
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .bg(if is_q { ca(0x5aa9f0, 0.14) } else { ca(0xf2b84b, 0.14) })
+                            .text_color(if is_q { theme::blue() } else { gold() })
+                            .child(if is_q { "STUDY QUESTION" } else { "KEY TERM" }),
+                    )
+                    .when(again, |d| d.child(div().text_size(px(11.)).text_color(c(0xf3a19a)).child("again")))
+                    .child(div().flex_1())
+                    .child(div().text_size(px(12.)).text_color(faint()).child(if r.flipped { "answer" } else { "click or Space to flip" })),
+            )
+            .map(|d| {
+                if r.flipped {
+                    d.child(div().text_size(px(15.)).font_weight(FontWeight::MEDIUM).text_color(muted()).line_height(px(22.)).child(card.front.clone()))
+                        .child(div().h(px(1.)).bg(border()))
+                        .child(div().text_size(px(16.)).line_height(px(25.)).text_color(text()).child(card.back.clone()))
+                } else {
+                    d.child(
+                        div().flex_1().flex().items_center().justify_center().child(
+                            div()
+                                .text_size(px(if is_q { 20. } else { 26. }))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .line_height(px(if is_q { 29. } else { 34. }))
+                                .text_center()
+                                .child(card.front.clone()),
+                        ),
+                    )
+                }
+            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                if let Some(r) = &mut this.cards {
+                    r.flipped = !r.flipped;
+                }
+                window.focus(&this.focus, cx);
+                cx.notify();
+            }));
+        shell
+            .gap(px(16.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(div().text_size(px(12.)).text_color(faint()).child(format!("{}/{total}", r.got + 1)))
+                    .child(div().flex_1().child(bar(r.got as f32 / total.max(1) as f32, violet())))
+                    .child(
+                        div()
+                            .id("cards-x")
+                            .text_size(px(12.))
+                            .text_color(faint())
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(text()))
+                            .child("Close")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.cards = None;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(face)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(div().flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(faint()).child(kbd("Space")).child("flip").child(kbd("1")).child("again").child(kbd("2")).child("got it"))
+                    .child(div().flex_1())
+                    .when(r.flipped, |row| {
+                        row.child(
+                            div()
+                                .id("again")
+                                .h(px(34.))
+                                .px(px(16.))
+                                .flex()
+                                .items_center()
+                                .gap(px(7.))
+                                .rounded_full()
+                                .border_1()
+                                .border_color(ca(0xf0645a, 0.45))
+                                .text_color(c(0xf3a19a))
+                                .text_size(px(13.))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(ca(0xf0645a, 0.1)))
+                                .child(theme::icon("rotate-ccw").size(px(14.)))
+                                .child("Again")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if let Some(r) = &mut this.cards {
+                                        r.answer(false);
+                                    }
+                                    window.focus(&this.focus, cx);
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("got-it")
+                                .h(px(34.))
+                                .px(px(16.))
+                                .flex()
+                                .items_center()
+                                .gap(px(7.))
+                                .rounded_full()
+                                .bg(green())
+                                .text_color(c(0x0b0b0c))
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .cursor_pointer()
+                                .hover(|s| s.bg(c(0x5be0a3)))
+                                .child(theme::icon("check").size(px(14.)))
+                                .child("Got it")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if let Some(r) = &mut this.cards {
+                                        r.answer(true);
+                                    }
+                                    this.refresh_card_result();
+                                    window.focus(&this.focus, cx);
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .when(!r.flipped, |row| {
+                        row.child(pill_btn("flip", "Show answer").on_click(cx.listener(|this, _, window, cx| {
+                            if let Some(r) = &mut this.cards {
+                                r.flipped = true;
+                            }
+                            window.focus(&this.focus, cx);
+                            cx.notify();
+                        })))
+                    }),
+            )
             .into_any_element()
     }
 
@@ -3375,6 +3782,7 @@ impl LazyApp {
 }
 
 const RECIPES: &[(Recipe, &str)] = &[
+    (Recipe::Chapter, "The whole chapter in one video, then multiple choice + flashcards"),
     (Recipe::Overview, "Understand it: intuition, definitions, examples, recap"),
     (Recipe::Terms, "Term drill: each definition with an example and a memory hook"),
     (Recipe::Questions, "How to answer the review questions, with model answers"),
